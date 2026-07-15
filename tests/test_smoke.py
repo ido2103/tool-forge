@@ -4,7 +4,7 @@ import importlib
 
 import pytest
 
-SUBSYSTEMS = ["orchestrator", "forge", "registry", "skills", "sandbox", "evals"]
+SUBSYSTEMS = ["orchestrator", "forge", "registry", "skills", "sandbox", "evals", "providers"]
 
 
 def test_package_imports() -> None:

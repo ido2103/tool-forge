@@ -14,7 +14,11 @@ uv run ruff check .                            # lint
 uv run ruff format .                           # format
 uv run ruff format --check .                   # format check (what CI runs)
 uv run mypy                                    # type-check (strict; targets src/ and tests/)
+uv run pytest -m live                          # live provider smoke tests (needs creds/server; see .env.example)
 ```
+
+Runtime configuration lives in `.env` (gitignored) — copy `.env.example` and fill in.
+pytest configuration lives in `pytest.ini` (live tests are deselected by default).
 
 ## Git workflow
 
@@ -76,7 +80,10 @@ later API calls (the model never edits its own payload). v1 forges mid-task
 (pause/build/resume).
 
 **Subsystems** (`src/toolforge/<name>/`, each documented in `docs/<name>.md`):
-orchestrator, forge, registry, skills, sandbox, evals.
+orchestrator, forge, registry, skills, sandbox, evals, providers (model clients:
+Anthropic for the orchestrator, OpenAI-compatible for the forge worker; ported from
+Zeemon — both must keep implementing the `ProviderClient` protocol so Zeemon's agent
+loop can drop in).
 
 **Safety**: all generated code runs in the sandbox — container, no network by default,
 per-tool allowlisted domains; every credential access and execution is logged;
