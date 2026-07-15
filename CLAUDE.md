@@ -12,6 +12,7 @@ uv run pytest                                  # run all tests
 uv run pytest tests/test_smoke.py::test_package_imports   # run a single test
 uv run ruff check .                            # lint
 uv run ruff format .                           # format
+uv run ruff format --check .                   # format check (what CI runs)
 uv run mypy                                    # type-check (strict; targets src/ and tests/)
 ```
 
@@ -42,17 +43,22 @@ Full design: [docs/spec.md](docs/spec.md) (verbatim handoff, source of truth) an
 
 ## Architecture
 
-**Model split** — frontier tokens for decisions, local tokens for sweat:
+**Model split** — frontier tokens for decisions, cheap tokens for sweat:
 - *Orchestrator* (frontier API model, Claude Sonnet/Opus): task execution, wall
   detection, tool-spec and adversarial-test authoring, skill authoring, satisfaction
   review. All judgment lives here.
-- *Forge worker* (Qwen3.6-35B-A3B, local): implements tools against failing tests until
-  green. Cross-model separation mitigates the self-verification trap.
+- *Forge worker* (configurable backend): implements tools against failing tests until
+  green. Two first-class modes — **api** (default; a cheaper API model, e.g. Claude
+  Haiku; no local hardware required) and **local** (Qwen3.6-35B-A3B or Qwen3.6-27B via
+  any OpenAI-compatible endpoint). Invariant in both: the worker is never the same
+  model as the orchestrator — cross-model separation mitigates the self-verification
+  trap.
 
 **Core loop**: orchestrator works a task with registered tools → on failure the wall
 detector classifies (missing tool / misuse / impossible) → missing tool: check registry
 for reuse/composition first → else forge (frontier writes adversarial tests from spec
-only; Qwen implements with a docs-RAG tool under a bounded iteration budget) →
+only; the forge worker implements with a docs-RAG tool under a bounded iteration
+budget) →
 orchestrator holdout check (**green tests alone never register a tool**) → tool + spec +
 tests + companion usage skill registered; the harness appends the new tool schema to
 later API calls (the model never edits its own payload). v1 forges mid-task
