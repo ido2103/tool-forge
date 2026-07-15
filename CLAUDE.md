@@ -12,6 +12,7 @@ uv run pytest                                  # run all tests
 uv run pytest tests/test_smoke.py::test_package_imports   # run a single test
 uv run ruff check .                            # lint
 uv run ruff format .                           # format
+uv run ruff format --check .                   # format check (what CI runs)
 uv run mypy                                    # type-check (strict; targets src/ and tests/)
 ```
 
