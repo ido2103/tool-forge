@@ -37,4 +37,4 @@ uv run mypy          # type-check
 
 ## License
 
-Copyright © 2026 Ido Assaraf. All rights reserved. See [LICENSE](LICENSE).
+Copyright © 2026 Ido Assaraf. Licensed under the [Apache License 2.0](LICENSE).
