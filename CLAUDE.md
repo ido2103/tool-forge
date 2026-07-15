@@ -16,6 +16,17 @@ uv run ruff format --check .                   # format check (what CI runs)
 uv run mypy                                    # type-check (strict; targets src/ and tests/)
 ```
 
+## Git workflow
+
+- **Never commit on `main`.** Always check out a feature branch first
+  (`git checkout -b <type>/<short-name>`, e.g. `feat/wall-detector`).
+- **Committing runs checks automatically** via pre-commit hooks
+  (`.pre-commit-config.yaml`): ruff check (with `--fix`), ruff format, and mypy. If a
+  hook fails or rewrites files, re-stage and commit again. `pytest` is NOT hooked —
+  run `uv run pytest` manually and pass before every commit.
+- **PRs**: when a branch is ready, proactively suggest opening a PR, but always ask
+  the user for permission before actually creating one.
+
 ## Contracts
 
 These are standing rules for every session working in this repo:
