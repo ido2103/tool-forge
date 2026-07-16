@@ -301,6 +301,46 @@ async def test_timeout_retried(
     assert route.call_count == 2
 
 
+async def test_midstream_failure_surfaces_no_retry(
+    respx_mock: respx.MockRouter,
+    no_retry_delay: None,
+    anthropic_client: AnthropicClient,
+    user_msg: Callable[[str], Message],
+    anthropic_sse: Callable[[SseEvents], bytes],
+    simple_anthropic_events: Callable[..., SseEvents],
+    midstream_failure_response: Callable[[bytes, Exception], httpx.Response],
+) -> None:
+    """A failure after deltas were delivered must surface, not retry.
+
+    A silent retry would replay the (freshly sampled) response from the top,
+    duplicating text for on_text_delta consumers.
+    """
+    events = simple_anthropic_events()
+    partial = anthropic_sse(events[:3])  # message_start, block_start, delta "Hello"
+    route = respx_mock.post(_MESSAGES_URL)
+    route.side_effect = [
+        midstream_failure_response(partial, httpx.ReadTimeout("mid-stream drop")),
+        _sse_response(anthropic_sse(events)),  # must never be consumed
+    ]
+
+    chunks: list[str] = []
+
+    async def on_text(t: str) -> None:
+        chunks.append(t)
+
+    with pytest.raises(httpx.TimeoutException):
+        await anthropic_client.send(
+            messages=[user_msg("hi")],
+            system="sys",
+            model="claude-test",
+            max_tokens=64,
+            on_text_delta=on_text,
+        )
+
+    assert route.call_count == 1
+    assert chunks == ["Hello"]  # partial text delivered exactly once
+
+
 async def test_oauth_masquerade_headers_and_system_prefix(
     respx_mock: respx.MockRouter,
     anthropic_client_oauth: AnthropicClient,

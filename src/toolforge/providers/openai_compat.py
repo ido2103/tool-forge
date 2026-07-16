@@ -394,7 +394,13 @@ class OpenAICompatClient:
 
         # Local servers (vLLM warm-up, llama.cpp model load) drop connections
         # transiently — retry with the same ladder as the Anthropic adapter.
+        # Retries are only safe while nothing has been delivered to the
+        # consumer: a retried attempt re-samples the response from scratch, so
+        # replaying it after events already reached on_text_delta/-thinking
+        # callbacks would duplicate/garble live output. Once `delivered` is
+        # set, any failure surfaces to the caller instead.
         last_exc: Exception | None = None
+        delivered = False
         for attempt in range(_MAX_STREAM_RETRIES + 1):
             tool_acc: dict[int, dict[str, Any]] = {}
             final_state: dict[str, Any] = {}
@@ -413,9 +419,10 @@ class OpenAICompatClient:
                     cancel_event=cancel_event,
                 ):
                     yield ev
+                    delivered = True
                 return
             except openai.APIStatusError as exc:
-                if exc.status_code not in _RETRYABLE_STATUS:
+                if delivered or exc.status_code not in _RETRYABLE_STATUS:
                     raise
                 last_exc = exc
                 delay = _BASE_DELAY * (2**attempt) + random.uniform(0, 1)
@@ -427,6 +434,8 @@ class OpenAICompatClient:
                 )
                 await asyncio.sleep(delay)
             except openai.APIConnectionError as exc:
+                if delivered:
+                    raise
                 last_exc = exc
                 delay = _BASE_DELAY * (2**attempt) + random.uniform(0, 1)
                 logger.warning(
@@ -437,9 +446,12 @@ class OpenAICompatClient:
                 )
                 await asyncio.sleep(delay)
             except httpx.TimeoutException as exc:
-                # A raw httpx timeout escaping mid-stream is not wrapped by the
-                # SDK. Retrying is safe: the usage hook / MessageEnd only fire
-                # after the stream is fully drained.
+                # A raw httpx timeout escaping mid-stream is not wrapped by
+                # the SDK. Retryable only pre-delivery (see `delivered`
+                # above); once events reached the consumer the timeout
+                # surfaces instead.
+                if delivered:
+                    raise
                 last_exc = exc
                 delay = _BASE_DELAY * (2**attempt) + random.uniform(0, 1)
                 logger.warning(

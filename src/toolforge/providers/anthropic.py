@@ -457,7 +457,14 @@ class AnthropicClient:
         if self.settings.extended_thinking == "adaptive":
             kwargs["thinking"] = {"type": "adaptive", "display": "summarized"}
 
+        # Retries are only safe while nothing has been delivered to the
+        # consumer: a retried attempt re-samples the response from scratch, so
+        # replaying it after events already reached on_text_delta/-thinking
+        # callbacks would duplicate/garble live output. Once `delivered` is
+        # set, any failure surfaces to the caller (Zeemon's loop catches the
+        # provider exception types and owns turn-level recovery).
         last_exc: Exception | None = None
+        delivered = False
         oauth_refreshed = False
         for attempt in range(_MAX_STREAM_RETRIES + 1):
             tool_ids: dict[int, str] = {}
@@ -478,14 +485,15 @@ class AnthropicClient:
                     cancel_event=cancel_event,
                 ):
                     yield ev
+                    delivered = True
                 return
             except anthropic.AuthenticationError:
-                if self.auth_mode is not AuthMode.OAUTH or oauth_refreshed:
+                if delivered or self.auth_mode is not AuthMode.OAUTH or oauth_refreshed:
                     raise
                 oauth_refreshed = True
                 continue
             except anthropic.APIStatusError as exc:
-                if exc.status_code not in _RETRYABLE_STATUS:
+                if delivered or exc.status_code not in _RETRYABLE_STATUS:
                     raise
                 last_exc = exc
                 delay = _BASE_DELAY * (2**attempt) + random.uniform(0, 1)
@@ -497,6 +505,8 @@ class AnthropicClient:
                 )
                 await asyncio.sleep(delay)
             except anthropic.APIConnectionError as exc:
+                if delivered:
+                    raise
                 last_exc = exc
                 delay = _BASE_DELAY * (2**attempt) + random.uniform(0, 1)
                 logger.warning(
@@ -508,10 +518,11 @@ class AnthropicClient:
                 await asyncio.sleep(delay)
             except httpx.TimeoutException as exc:
                 # A raw httpx read/connect timeout that escapes mid-stream is
-                # not wrapped by the SDK in APIConnectionError. Retrying is
-                # safe: send() ignores partial events and the usage hook /
-                # MessageEnd only fire at message_stop, which a timed-out
-                # attempt never reaches.
+                # not wrapped by the SDK in APIConnectionError. Retryable only
+                # pre-delivery (see `delivered` above); once events reached
+                # the consumer the timeout surfaces instead.
+                if delivered:
+                    raise
                 last_exc = exc
                 delay = _BASE_DELAY * (2**attempt) + random.uniform(0, 1)
                 logger.warning(
@@ -524,8 +535,11 @@ class AnthropicClient:
             except ValueError as exc:
                 # SDK bug anthropic-sdk#1265: from_json(partial_mode=True)
                 # in the non-beta streaming path raises on malformed tool
-                # input JSON instead of surfacing the buffer.
-                if attempt >= 2:
+                # input JSON instead of surfacing the buffer. This usually
+                # fires after ToolUseStart was already delivered, in which
+                # case it surfaces like every post-delivery failure; the
+                # retry below is a pre-delivery guard only.
+                if delivered or attempt >= 2:
                     raise
                 last_exc = exc
                 delay = _BASE_DELAY * (2**attempt) + random.uniform(0, 1)

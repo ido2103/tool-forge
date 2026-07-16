@@ -439,6 +439,45 @@ async def test_connect_error_retried(
     assert route.call_count == 2
 
 
+async def test_midstream_failure_surfaces_no_retry(
+    respx_mock: respx.MockRouter,
+    no_retry_delay: None,
+    worker_client: OpenAICompatClient,
+    user_msg: Callable[[str], Message],
+    chat_sse: Callable[[Chunks], bytes],
+    midstream_failure_response: Callable[[bytes, Exception], httpx.Response],
+) -> None:
+    """A failure after deltas were delivered must surface, not retry.
+
+    A silent retry would replay the (freshly sampled) response from the top,
+    duplicating text for on_text_delta consumers.
+    """
+    first = _text_chunks()[0]  # role + content "Hello"
+    partial = f"data: {json.dumps(first)}\n\n".encode()  # no [DONE]
+    route = respx_mock.post(_CHAT_URL)
+    route.side_effect = [
+        midstream_failure_response(partial, httpx.ReadTimeout("mid-stream drop")),
+        _sse_response(chat_sse(_text_chunks())),  # must never be consumed
+    ]
+
+    chunks: list[str] = []
+
+    async def on_text(t: str) -> None:
+        chunks.append(t)
+
+    with pytest.raises(httpx.TimeoutException):
+        await worker_client.send(
+            messages=[user_msg("hi")],
+            system="sys",
+            model="test-model",
+            max_tokens=128,
+            on_text_delta=on_text,
+        )
+
+    assert route.call_count == 1
+    assert chunks == ["Hello"]  # partial text delivered exactly once
+
+
 def test_protocol_conformance(worker_client: OpenAICompatClient) -> None:
     client: ProviderClient = worker_client  # mypy: structural conformance, no cast
     assert client.name == "openai"

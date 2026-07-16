@@ -10,11 +10,12 @@ from __future__ import annotations
 import json
 import os
 import time
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
 from pydantic import SecretStr
 
@@ -169,6 +170,33 @@ def chat_sse() -> Callable[[list[dict[str, Any]]], bytes]:
     def build(chunks: list[dict[str, Any]]) -> bytes:
         body = b"".join(f"data: {json.dumps(ch)}\n\n".encode() for ch in chunks)
         return body + b"data: [DONE]\n\n"
+
+    return build
+
+
+class _FailingByteStream(httpx.AsyncByteStream):
+    """Yields the given chunks, then raises — simulates a mid-stream drop."""
+
+    def __init__(self, chunks: list[bytes], exc: Exception) -> None:
+        self._chunks = chunks
+        self._exc = exc
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        for chunk in self._chunks:
+            yield chunk
+        raise self._exc
+
+
+@pytest.fixture
+def midstream_failure_response() -> Callable[[bytes, Exception], httpx.Response]:
+    """SSE response whose body streams ``partial_body`` and then raises ``exc``."""
+
+    def build(partial_body: bytes, exc: Exception) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            stream=_FailingByteStream([partial_body], exc),
+        )
 
     return build
 

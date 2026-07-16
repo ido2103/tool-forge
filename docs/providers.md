@@ -46,9 +46,15 @@ Streams via the official `anthropic` SDK. Configured by
 - **Retry ladder** — up to 5 retries with exponential backoff + jitter on
   429/500/502/503/529, connection errors, raw httpx timeouts, and (≤2×) the
   SDK's malformed-tool-JSON `ValueError` (anthropic-sdk#1265). On OAuth 401:
-  force-refresh once, then retry. Exceptions re-raise after exhaustion — the
+  force-refresh once, then retry. Retries apply **only until the first event
+  is delivered to the consumer** — a retried attempt re-samples the response
+  from scratch, so retrying after deltas already reached
+  `on_text_delta`/`on_thinking_delta` would duplicate live output. Mid-stream
+  failures therefore surface to the caller (this also makes the #1265
+  workaround pre-delivery-only). Exceptions re-raise after exhaustion — the
   agent loop can catch `anthropic.APIStatusError` / `APIConnectionError` /
-  `httpx.TimeoutException` as Zeemon's loop does.
+  `httpx.TimeoutException` as Zeemon's loop does, and owns turn-level
+  recovery.
 - **Prompt caching** — top-level `cache_control` on every request
   (`ephemeral`, or 1-hour TTL via `TOOLFORGE_ANTHROPIC_CACHE_TTL=1h`).
 - **Thinking** — `TOOLFORGE_ANTHROPIC_EXTENDED_THINKING=adaptive` (default)
@@ -81,8 +87,10 @@ and Anthropic-shape tools; the adapter translates both ways and mints stable
 Qwen-style models) maps to `ThinkingDelta` / an unsigned `ThinkingBlock`.
 Malformed streamed tool arguments fall back to `{}` input rather than crashing.
 Same retry ladder as the Anthropic client (local servers drop connections
-during warm-up). The worker sends `max_tokens` (accepted by vLLM/llama.cpp;
-OpenAI proper deprecates it, but OpenAI proper is not a target).
+during warm-up), with the same rule: no retry once any event was delivered —
+mid-stream failures surface to the caller. The worker sends `max_tokens`
+(accepted by vLLM/llama.cpp; OpenAI proper deprecates it, but OpenAI proper is
+not a target).
 
 ## Usage hook (`usage.py`)
 
