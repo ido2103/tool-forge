@@ -57,7 +57,13 @@ Each maps to a package under `src/toolforge/` and a doc in this folder:
 - [skills](skills.md) — markdown playbooks + per-tool usage skills
 - [sandbox](sandbox.md) — isolated execution for all generated code
 - [evals](evals.md) — reuse rate, composition depth, held-out success (the README graphs)
+- [providers](providers.md) — model clients: Anthropic (orchestrator; api-key/OAuth) +
+  OpenAI-compatible (forge worker; vLLM/llama.cpp), canonical message types, usage hook
+
+Runtime configuration comes from `.env` via `src/toolforge/config.py`
+(pydantic-settings); every variable is documented in `.env.example`.
 
 ## Status
 
-Skeleton only — no subsystem implemented yet. Update this section as subsystems land.
+**providers** implemented (ported from Zeemon; both clients tested mocked + live).
+All other subsystems are skeleton only. Update this section as subsystems land.
