@@ -17,7 +17,7 @@ jobs:
       github.event.pull_request.head.repo.full_name == github.repository &&
       github.actor != 'dependabot[bot]'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     permissions:
       contents: read
       pull-requests: write
@@ -29,6 +29,11 @@ jobs:
           fetch-depth: 1
 
       - uses: anthropics/claude-code-action@v1
+        id: review
+        # Don't fail the job yet on turn exhaustion — the wrap-up step below
+        # resumes the session to post a partial review; the final guard step
+        # turns unrecovered failures red.
+        continue-on-error: true
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           track_progress: true
@@ -49,5 +54,34 @@ jobs:
             Only post GitHub comments — do not emit review text as plain
             messages.
           claude_args: |
-            --max-turns 30
-            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*)"
+            --max-turns 50
+            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr checks:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*)"
+
+      # --max-turns has no graceful mode: hitting it always exits with
+      # error_max_turns and nothing gets posted. Resume the same session via
+      # the action (which re-provisions the inline-comment MCP server and
+      # auth) and force a wrap-up from findings gathered so far.
+      - name: Wrap up review after turn limit
+        id: wrapup
+        if: steps.review.outcome == 'failure' && steps.review.outputs.session_id != ''
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            Your previous review run hit its turn limit before finishing.
+            Do not continue investigating. Post the review NOW with the
+            findings you already have, using REVIEW.md's reporting format:
+            - Use mcp__github_inline_comment__create_inline_comment (with
+              confirmed: true) for specific lines you already identified.
+            - Use `gh pr comment` for the top-level summary; state in it
+              that the review is partial because the turn limit was reached.
+          claude_args: |
+            --resume ${{ steps.review.outputs.session_id }}
+            --max-turns 10
+            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*)"
+
+      - name: Fail if review did not complete
+        if: steps.review.outcome == 'failure' && steps.wrapup.outcome != 'success'
+        run: |
+          echo "Review failed and could not be wrapped up (session_id: '${{ steps.review.outputs.session_id }}')."
+          exit 1
