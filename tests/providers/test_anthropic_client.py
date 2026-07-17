@@ -11,7 +11,6 @@ from types import SimpleNamespace
 from typing import Any
 from uuid import uuid4
 
-import anthropic
 import httpx
 import pytest
 import respx
@@ -22,11 +21,13 @@ from toolforge.providers import (
     AnthropicClient,
     Message,
     MessageEnd,
+    PermanentProviderError,
     ProviderClient,
     TextDelta,
     ToolUseDelta,
     ToolUseEnd,
     ToolUseStart,
+    TransientProviderError,
     UsageEvent,
 )
 
@@ -256,7 +257,8 @@ async def test_retry_exhaustion_reraises(
         return_value=_error_response(529, "overloaded_error")
     )
 
-    with pytest.raises(anthropic.APIStatusError):
+    # send() translates the exhausted SDK error into the neutral taxonomy.
+    with pytest.raises(TransientProviderError):
         await anthropic_client.send(
             messages=[user_msg("hi")], system="sys", model="claude-test", max_tokens=64
         )
@@ -273,7 +275,7 @@ async def test_non_retryable_400_raises_immediately(
         return_value=_error_response(400, "invalid_request_error")
     )
 
-    with pytest.raises(anthropic.BadRequestError):
+    with pytest.raises(PermanentProviderError):
         await anthropic_client.send(
             messages=[user_msg("hi")], system="sys", model="claude-test", max_tokens=64
         )
@@ -328,7 +330,8 @@ async def test_midstream_failure_surfaces_no_retry(
     async def on_text(t: str) -> None:
         chunks.append(t)
 
-    with pytest.raises(httpx.TimeoutException):
+    # The post-delivery timeout surfaces (not retried) and send() translates it.
+    with pytest.raises(TransientProviderError):
         await anthropic_client.send(
             messages=[user_msg("hi")],
             system="sys",

@@ -27,6 +27,7 @@ from toolforge.providers import (
     ToolUseDelta,
     ToolUseEnd,
     ToolUseStart,
+    TransientProviderError,
     UsageEvent,
 )
 from toolforge.providers.openai_compat import (
@@ -465,7 +466,8 @@ async def test_midstream_failure_surfaces_no_retry(
     async def on_text(t: str) -> None:
         chunks.append(t)
 
-    with pytest.raises(httpx.TimeoutException):
+    # The post-delivery timeout surfaces (not retried) and send() translates it.
+    with pytest.raises(TransientProviderError):
         await worker_client.send(
             messages=[user_msg("hi")],
             system="sys",

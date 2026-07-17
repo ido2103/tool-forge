@@ -30,6 +30,37 @@ class AuthMode(StrEnum):
     OAUTH = "oauth"
 
 
+# ── Provider error taxonomy ──────────────────────────────────────────────────
+#
+# Adapters translate their SDK-specific exceptions into these neutral types at
+# the send() boundary, so the orchestrator loop can decide retry-vs-fail without
+# importing anthropic/openai/httpx. The internal per-adapter retry ladders (which
+# switch on SDK types) are unchanged — this taxonomy is only what escapes send().
+
+_RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 529})
+
+
+class ProviderError(Exception):
+    """Base for provider failures that reach the caller after send()."""
+
+
+class TransientProviderError(ProviderError):
+    """A transient failure (rate limit, 5xx, connection drop, timeout). Retryable."""
+
+
+class PermanentProviderError(ProviderError):
+    """A non-retryable failure (4xx other than 429, malformed request). Fail fast."""
+
+
+def is_transient_status(status: int | None, err_type: str | None) -> bool:
+    """Classify an HTTP status + optional body ``error.type`` as transient.
+
+    ``err_type == "api_error"`` covers mid-stream SSE errors that arrive as an
+    HTTP 200 with the real error embedded in the body.
+    """
+    return status in _RETRYABLE_STATUS or err_type == "api_error"
+
+
 class _Event(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
