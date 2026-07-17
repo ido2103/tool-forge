@@ -19,3 +19,7 @@ venv/
 
 # Secrets
 .env
+
+# Sandbox workspace (run_bash artifacts) and per-run transcripts
+/workspace/
+/runs/

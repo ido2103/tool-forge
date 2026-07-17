@@ -1,0 +1,88 @@
+"""The ``run_bash`` seed tool — the orchestrator's one hand-written primitive.
+
+Trusted (hand-written) code, but the *commands* are model-chosen, so it executes
+inside the Docker sandbox rather than on the host. Composable-primitive by
+design (per the granularity principle): a general shell, not a task-specific
+mega-tool.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from toolforge.registry import RegisteredTool, ToolContext, ToolResult
+from toolforge.sandbox.bash import BashSandbox
+
+_DESCRIPTION = """\
+Run a shell command inside an isolated Docker container (python:3.12-slim) and \
+return its combined stdout+stderr and exit code.
+
+Use this to inspect files, run scripts, install packages, and generally do work \
+in the sandbox. Do NOT use it for actions that must affect the host machine — it \
+cannot; everything runs in the container.
+
+Environment and constraints:
+- The working directory is /workspace, a directory shared with the host. Write \
+files you want to keep there. Nothing outside /workspace is guaranteed to persist.
+- Each call runs in a FRESH shell: `cd` and environment variables set in one call \
+do NOT carry over to the next. Use absolute paths (e.g. /workspace/build/run.py) \
+and set any needed env vars inline in the same command.
+- Python 3.12, pip, and standard build tools are available. `pip install <pkg>` \
+works when the sandbox has network access (the default); if the network is \
+disabled, installs and network calls will fail.
+- Output is capped; very large output is truncated head+tail. Filter with \
+grep/head/tail to see what you need.
+- Long commands are killed after a timeout (default from config; override with \
+the `timeout` parameter, in seconds)."""
+
+_INPUT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "command": {
+            "type": "string",
+            "description": "The shell command to run, e.g. 'python3 /workspace/x.py'.",
+        },
+        "timeout": {
+            "type": "integer",
+            "description": "Optional per-command timeout in seconds; defaults to the sandbox config.",
+        },
+    },
+    "required": ["command"],
+}
+
+
+def build_run_bash(sandbox: BashSandbox) -> RegisteredTool:
+    """Build the ``run_bash`` RegisteredTool bound to *sandbox*."""
+
+    async def handler(inp: dict[str, Any], ctx: ToolContext) -> ToolResult:
+        command = inp.get("command")
+        if not isinstance(command, str) or not command.strip():
+            return ToolResult(
+                tool_use_id="",
+                content="[run_bash error: 'command' must be a non-empty string]",
+                is_error=True,
+            )
+        timeout = inp.get("timeout")
+        if timeout is not None and not isinstance(timeout, int):
+            return ToolResult(
+                tool_use_id="",
+                content="[run_bash error: 'timeout' must be an integer number of seconds]",
+                is_error=True,
+            )
+
+        result = await sandbox.run(command, timeout=timeout)
+        if result.timed_out:
+            return ToolResult(tool_use_id="", content=result.stdout, is_error=True)
+        body = result.stdout
+        if body and not body.endswith("\n"):
+            body += "\n"
+        content = f"{body}[exit code: {result.exit_code}]"
+        return ToolResult(tool_use_id="", content=content, is_error=result.exit_code != 0)
+
+    return RegisteredTool(
+        name="run_bash",
+        description=_DESCRIPTION,
+        input_schema=_INPUT_SCHEMA,
+        handler=handler,
+        trust="TRUSTED",
+    )
