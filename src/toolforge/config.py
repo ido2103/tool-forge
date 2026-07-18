@@ -121,6 +121,9 @@ class SandboxSettings(BaseSettings):
     image: str = "python:3.12-slim"
     network: Literal["on", "none"] = "on"
     workspace_path: Path = Path("./workspace")
+    # Project-relative on purpose (like workspace_path/runs): a per-project
+    # toolbox keeps eval runs isolated and grown tools visible in the repo.
+    tools_path: Path = Path("./tools")
     command_timeout: int = 60
     output_cap: int = 100_000
 
@@ -138,7 +141,7 @@ class SandboxSettings(BaseSettings):
             raise ValueError("output_cap must be > 0")
         return v
 
-    @field_validator("workspace_path")
+    @field_validator("workspace_path", "tools_path")
     @classmethod
     def _absolute(cls, v: Path) -> Path:
         return v.expanduser().resolve()

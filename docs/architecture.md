@@ -83,22 +83,27 @@ Runtime configuration comes from `.env` via `src/toolforge/config.py`
   storage, retrieval-before-forge, and the curator are future slices.
 - **sandbox** — v0 Docker-contained `run_bash` seed tool (container started eagerly
   at REPL boot with a lock-guarded fallback, `/workspace` mount, config-toggleable
-  network, output caps, serialized via the `"sandbox"` group). The spec's
-  generated-code isolation (no-network-default, domain allowlists, credential
-  logging) is future work.
-- **forge** — orchestrator interface stubbed: `forge_tool` (spec → candidate, never
-  registers) and `register_tool` (promotes after the orchestrator's holdout check),
-  sharing an in-memory `CandidateStore`. Both fully validate input and return a guided
-  not-implemented error; the internal build loop (test author + worker) is the next
-  slice. See [forge.md](forge.md).
+  network, output caps, serialized via the `"sandbox"` group), plus the read-only
+  `/tools` mount hosting the forged-tool store. The spec's generated-code isolation
+  (no-network-default, domain allowlists, credential logging) is future work.
+- **forge** — `register_tool` implemented: promotes a verified candidate into the
+  persistent tool store (`./tools`, read-only in the container) and the live
+  registry, executing via a harness-owned runner in the sandbox; the store is
+  rescanned at boot, so the toolbox survives restarts. `forge_tool` (spec →
+  candidate) still validates input and returns a guided not-implemented error; the
+  internal build loop (test author + worker) is the next slice. See
+  [forge.md](forge.md).
 
 **How it wires together today:** the REPL builds an `AnthropicClient`, a `BashSandbox`
 + `ToolRegistry` (with `run_bash`, `forge_tool`, and `register_tool` bound to a shared
-`CandidateStore` and the live registry), a `HookManager`, and a `Transcript`, starts
-the sandbox container eagerly (failing loudly at boot if Docker is down), then hands
-them to the `Orchestrator`. Each turn the loop re-reads the registry's schemas, calls the
-provider, and dispatches tool calls into the sandbox. This is the spine the forge, wall
-detector, skills, and evals will hang off.
+`CandidateStore` and the live registry), installs the forged-tool runner and reloads
+every persisted tool from the `./tools` store (skipping corrupt entries with a
+warning), builds a `HookManager` and a `Transcript`, starts the sandbox container
+eagerly (failing loudly at boot if Docker is down), then hands them to the
+`Orchestrator`. Each turn the loop re-reads the registry's schemas, calls the
+provider, and dispatches tool calls into the sandbox; `/reset` also drops unpromoted
+candidates. This is the spine the forge's build loop, wall detector, skills, and evals
+will hang off.
 
 **Skeleton only:** skills, evals; the forge's internal build loop. Update this section
 as subsystems land.

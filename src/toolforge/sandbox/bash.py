@@ -103,6 +103,11 @@ class BashSandbox:
         argv += [
             "-v",
             f"{self._settings.workspace_path}:/workspace",
+            # Read-only: forged tools are written host-side by the harness and
+            # must be immutable to the agent. Directory bind mounts propagate
+            # live, so a tool promoted mid-session is visible without a restart.
+            "-v",
+            f"{self._settings.tools_path}:/tools:ro",
             "-w",
             "/workspace",
             self._settings.image,
@@ -136,6 +141,7 @@ class BashSandbox:
             if self._started:
                 return
             self._settings.workspace_path.mkdir(parents=True, exist_ok=True)
+            self._settings.tools_path.mkdir(parents=True, exist_ok=True)
             exit_code, out = await self._runner(self._run_argv(), timeout=60)
             if exit_code != 0:
                 raise RuntimeError(

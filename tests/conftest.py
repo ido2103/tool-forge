@@ -122,6 +122,7 @@ def sandbox_settings(tmp_path: Path) -> SandboxSettings:
         image="python:3.12-slim",
         network="none",
         workspace_path=tmp_path / "workspace",
+        tools_path=tmp_path / "tools",
         command_timeout=30,
         output_cap=10_000,
     )

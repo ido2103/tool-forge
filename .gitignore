@@ -20,6 +20,7 @@ venv/
 # Secrets
 .env
 
-# Sandbox workspace (run_bash artifacts) and per-run transcripts
+# Sandbox workspace (run_bash artifacts), forged-tool store, per-run transcripts
 /workspace/
+/tools/
 /runs/

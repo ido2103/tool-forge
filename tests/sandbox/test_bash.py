@@ -114,6 +114,22 @@ async def test_run_argv_mounts_workspace(sandbox_settings: SandboxSettings) -> N
     assert mount.endswith(":/workspace")
 
 
+async def test_run_argv_mounts_tools_read_only(sandbox_settings: SandboxSettings) -> None:
+    runner = FakeRunner([(0, b"started"), (0, b"")])
+    sb = _sandbox(runner, sandbox_settings)
+    await sb.run("true")
+    run_argv = runner.calls[0]
+    mounts = [run_argv[i + 1] for i, arg in enumerate(run_argv) if arg == "-v"]
+    assert f"{sandbox_settings.tools_path}:/tools:ro" in mounts
+
+
+async def test_start_creates_tools_dir(sandbox_settings: SandboxSettings) -> None:
+    runner = FakeRunner([(0, b"started")])
+    sb = _sandbox(runner, sandbox_settings)
+    await sb.start()
+    assert sandbox_settings.tools_path.is_dir()
+
+
 # ── lifecycle ────────────────────────────────────────────────────────────────
 
 

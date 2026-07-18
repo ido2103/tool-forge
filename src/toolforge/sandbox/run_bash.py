@@ -23,7 +23,9 @@ cannot; everything runs in the container.
 
 Environment and constraints:
 - The working directory is /workspace, a directory shared with the host. Write \
-files you want to keep there. Nothing outside /workspace is guaranteed to persist.
+files you want to keep there. /tools holds the registered forged tools \
+(read-only: inspectable, not writable). Nothing outside these two is \
+guaranteed to persist.
 - Each call runs in a FRESH shell: `cd` and environment variables set in one call \
 do NOT carry over to the next. Use absolute paths (e.g. /workspace/build/run.py) \
 and set any needed env vars inline in the same command.

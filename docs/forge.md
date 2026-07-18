@@ -1,13 +1,16 @@
 # Forge
 
-**Status: orchestrator interface stubbed (`forge_tool` / `register_tool`); internal build loop not implemented**
+**Status: `register_tool` implemented — promotion into a persistent read-only tool
+store, sandbox execution via a harness-owned runner, and boot-time reload.
+`forge_tool` remains stubbed pending the internal build loop (test author + worker).**
 
 Turns a tool spec from the orchestrator into a verified, registered tool. Exposed to the
 orchestrator as **two composable tools** (`src/toolforge/forge/tools.py`): `forge_tool`
 builds a *candidate*, and `register_tool` promotes it after the orchestrator's own
-holdout check. Both are wired into the REPL registry; today they fully validate their
-input and return a guided not-implemented error — the internal build loop is the next
-slice.
+holdout check. Both are wired into the REPL registry; `forge_tool` fully validates its
+input and returns a guided not-implemented error — the build loop is the next slice.
+`register_tool` is real: a candidate whose files exist in the workspace is promoted,
+persisted, and callable on the next turn.
 
 ## Orchestrator interface
 
@@ -26,8 +29,9 @@ slice.
    contract. No dedicated holdout mechanism exists; the existing primitives compose.
 3. **`register_tool`** — takes `holdout_evidence` (first, required: the concrete unseen
    cases/review and their results) and `name`, and promotes the candidate into the live
-   `ToolRegistry`. Because the loop re-reads `get_schemas()` every iteration, the new
-   tool is callable on the next turn. Registered forged tools are `UNVERIFIED`.
+   `ToolRegistry` **and the on-disk tool store** (see below). Because the loop re-reads
+   `get_schemas()` every iteration, the new tool is callable on the next turn.
+   Registered forged tools are `UNVERIFIED`.
 
 The gap between the two calls structurally enforces the spec's rule that **green tests
 alone never register a tool**: the forge grades its own homework, so an independent
@@ -35,9 +39,81 @@ verification must happen in between.
 
 Candidates live in an in-memory `CandidateStore` (`src/toolforge/forge/candidates.py`)
 that both tools close over, keyed by name; re-forging a name replaces the candidate (the
-revision path after a failed verification), and nothing persists across sessions — v1
-forges mid-task, so nothing needs to. Open item: `/reset` in the REPL does not yet clear
-the store. Both forge tools are `TRUSTED` (their output is harness-generated text).
+revision path after a failed verification). Candidates die with the session (`/reset`
+also clears the store) — v1 forges mid-task, so unpromoted work needs no persistence.
+*Registered* tools persist (see the tool store). Both forge tools are `TRUSTED` (their
+output is harness-generated text).
+
+## The tool store (persistence + execution substrate)
+
+Promoted tools live in a host directory (default `./tools`, config
+`TOOLFORGE_SANDBOX_TOOLS_PATH`) that is bind-mounted **read-only** at `/tools` in the
+sandbox container: the agent can inspect registered tools but can never modify them —
+the only write path is `register_tool`'s harness-side promotion. The default is
+project-relative deliberately (like `./workspace` and `runs/`): a per-project toolbox
+keeps eval runs isolated and the grown toolbox visible; point the env var at a shared
+directory for a global toolbox. The directory is gitignored.
+
+Layout — the filesystem is the database (no SQLite; metadata cannot drift from code):
+
+```
+tools/
+  _runner.py            # harness-owned runner, reinstalled at every boot
+  <name>/
+    tool.py             # the implementation: a plain `def run(...)`
+    test_tool.py        # the candidate's tests, when it carried them
+    manifest.json       # spec + provenance, schema_version-ed
+```
+
+- **`manifest.json`** (`src/toolforge/forge/manifest.py`, `schema_version: 1`) holds
+  the registration spec (`name`, `description`, `input_schema`) plus provenance
+  (`behavior`, `gap_analysis`, `holdout_evidence`, `allowed_domains`, `examples`,
+  `test_report`, `created_at`). The loader hard-requires the spec fields, a name that
+  matches the directory, and a present `tool.py`; provenance is normalized, never
+  fatal.
+- **Promotion** (`src/toolforge/forge/promote.py`) is harness-side: it maps the
+  candidate's `/workspace/...` paths to host files (rejecting anything that escapes
+  the workspace, symlinks included), validates everything, then copies artifacts and
+  writes the manifest. Nothing is written until every check passes; the candidate is
+  consumed only after registration succeeds, so any failure leaves it available for a
+  revised attempt.
+- **Boot reload** (`load_persisted_tools`) rescans the store at REPL start and
+  re-registers every valid tool — the toolbox survives restarts with zero extra
+  machinery. A corrupt directory is skipped with a warning, never a crash.
+
+## Execution and the result contract
+
+A forged tool's `tool.py` is a plain module defining `run(...)` whose keyword
+parameters match its `input_schema` properties — no I/O boilerplate for the worker to
+get wrong, and pytest can import it directly. The harness-owned runner
+(`src/toolforge/forge/runner.py`, installed as `/tools/_runner.py`, stdlib-only) does
+the plumbing; the registered handler executes, in the shared container and serial
+group, with the global `command_timeout`:
+
+```
+python3 /tools/_runner.py <name> <base64(json-input)>
+```
+
+(Base64 keeps the argv shell-inert; the name is regex-validated at both promotion and
+load, so the composition is injection-safe.) What the model sees:
+
+| outcome | exit | model-visible result |
+|---|---|---|
+| `run()` returns `str` | 0 | the string, verbatim |
+| returns JSON-serializable | 0 | `json.dumps(...)` (`None` → `null`) |
+| returns non-serializable | 1 | `[tool error: ... non-JSON-serializable <type>]`, `is_error` |
+| `run()` raises | 1 | `[tool error]` + traceback, `is_error` |
+| harness fault (bad input encoding, missing/unimportable `tool.py`, no `run`) | 2 | `[forged-tool harness error: ...]`, `is_error` |
+| timeout | — | the standard sandbox timeout message, `is_error` |
+
+No `[exit code: N]` suffix — a forged tool returns a value, not a shell transcript.
+Since forged tools always execute sandbox-side, output flows through the existing
+ANSI-strip + truncation caps, and — being model-written code — is always wrapped in
+the `UNVERIFIED` prompt-injection envelope regardless of network posture.
+
+Signature *derivation* from `input_schema` is deferred to the worker slice (which
+generates the code); at this layer `run(**input)` plus Python's own `TypeError` is the
+enforcement, and the error message names the missing parameter.
 
 The worker's **iteration budget is configuration, not a tool parameter** — deliberately
 kept out of the schema so a failed forge is answered with a better spec, not a bigger
@@ -84,6 +160,12 @@ Recorded here per the documentation contract:
   derived mechanically — one source of truth, no schema/signature drift.
 - The companion usage skill at registration time is deferred until the skills
   subsystem exists; `register_tool`'s contract will grow a field for it.
+- `allowed_domains` is **recorded but not enforced** in v1: forged tools run in the
+  shared container under the global `TOOLFORGE_SANDBOX_NETWORK` setting. Per-tool
+  allowlists need the sandbox's filtering-proxy slice. (Mitigation until then: forged
+  output is always `UNVERIFIED`, so fetched text is quarantined either way.)
+- No per-tool timeout: the global `command_timeout` applies. The manifest's
+  `schema_version` leaves room to add one without breaking stored tools.
 
 ## Design notes
 
