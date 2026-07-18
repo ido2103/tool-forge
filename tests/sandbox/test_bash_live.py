@@ -54,5 +54,23 @@ async def test_real_container_round_trip(tmp_path: Path) -> None:
         # 4. Nonzero exit is reported.
         r3 = await sandbox.run("exit 7")
         assert r3.exit_code == 7
+
+        # 5. pipefail: an upstream failure in a pipeline is reported, not
+        #    masked by the exit code of the last command.
+        r4 = await sandbox.run("false | cat")
+        assert r4.exit_code != 0
+
+        # 5b. pipefail side effect: a producer killed by SIGPIPE when the
+        #     consumer exits early reports 141 at this (faithful) layer;
+        #     run_bash maps 141 to is_error=False (see test_run_bash.py).
+        r4b = await sandbox.run("seq 1 1000000 | head -1")
+        assert r4b.exit_code == 141
+        assert "1" in r4b.stdout
+
+        # 6. Known limitation: a `;`-list still reports only the last command,
+        #    so a trailing echo masks earlier failures. Mitigated by the
+        #    run_bash description (don't append exit markers), not the shell.
+        r5 = await sandbox.run("false; echo done")
+        assert r5.exit_code == 0
     finally:
         sandbox.teardown()

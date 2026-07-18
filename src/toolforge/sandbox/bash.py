@@ -2,8 +2,9 @@
 
 A single ``python:3.12-slim`` container is started lazily on the first command
 and lives for the sandbox object's lifetime (the REPL process). Each command
-runs via ``docker exec bash -lc`` — a *fresh* shell per call, so ``cd``/env do
-not persist; the host ``./workspace`` dir is mounted read-write at ``/workspace``
+runs via ``docker exec bash -o pipefail -lc`` — a *fresh* shell per call, so
+``cd``/env do not persist, with ``pipefail`` so a failure anywhere in a pipeline
+reaches the exit code; the host ``./workspace`` dir is mounted read-write at ``/workspace``
 (the working directory) so artifacts survive and are inspectable, and the repo
 itself is never mounted. Docker is driven through the CLI via ``subprocess`` (no
 docker SDK dependency); the subprocess call is injectable for unit tests.
@@ -109,7 +110,19 @@ class BashSandbox:
         return argv
 
     def _exec_argv(self, command: str) -> list[str]:
-        return ["docker", "exec", self._container_name, "bash", "-lc", command]
+        # pipefail: without it a pipeline reports the LAST command's exit code,
+        # so `curl … | head` exits 0 even when curl fails and the failure never
+        # reaches is_error. (`;`-list masking remains; see run_bash description.)
+        return [
+            "docker",
+            "exec",
+            self._container_name,
+            "bash",
+            "-o",
+            "pipefail",
+            "-lc",
+            command,
+        ]
 
     async def _ensure_started(self) -> None:
         if self._started:
