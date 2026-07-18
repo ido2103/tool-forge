@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
-from shutil import copyfile
+from shutil import copyfile, rmtree
 
 from toolforge.forge.candidates import Candidate
 from toolforge.forge.manifest import (
@@ -99,10 +99,16 @@ def promote_candidate(
         test_report=candidate.test_report,
     )
     tool_dir.mkdir(parents=True)
-    copyfile(code_host, tool_dir / "tool.py")
-    if test_host is not None:
-        copyfile(test_host, tool_dir / "test_tool.py")
-    write_manifest(manifest, tool_dir)
+    try:
+        copyfile(code_host, tool_dir / "tool.py")
+        if test_host is not None:
+            copyfile(test_host, tool_dir / "test_tool.py")
+        write_manifest(manifest, tool_dir)
+    except BaseException:
+        # A partial directory would block this name forever ("already exists")
+        # and draw a loader warning every boot — roll the store back instead.
+        rmtree(tool_dir, ignore_errors=True)
+        raise
     return manifest
 
 

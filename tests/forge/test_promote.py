@@ -113,6 +113,24 @@ def test_symlink_escape_rejected(tmp_path: Path) -> None:
         _promote(candidate, tmp_path)
 
 
+def test_failed_write_rolls_back_store_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A failure mid-write must not leave a partial dir that blocks the name forever."""
+    candidate = _candidate(tmp_path / "workspace")
+
+    def explode(manifest: object, tool_dir: Path) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr("toolforge.forge.promote.write_manifest", explode)
+    with pytest.raises(OSError, match="disk full"):
+        _promote(candidate, tmp_path)
+    assert not (tmp_path / "tools" / "fetch_rss").exists()
+
+    # The name is still promotable once the fault clears.
+    monkeypatch.undo()
+    _promote(candidate, tmp_path)
+    assert (tmp_path / "tools" / "fetch_rss" / "manifest.json").is_file()
+
+
 def test_existing_store_dir_rejected(tmp_path: Path) -> None:
     candidate = _candidate(tmp_path / "workspace")
     (tmp_path / "tools" / "fetch_rss").mkdir(parents=True)
