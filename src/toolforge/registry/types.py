@@ -79,6 +79,9 @@ class RegisteredTool:
     input_schema: dict[str, Any]
     handler: ToolHandler
     trust: Trust = "TRUSTED"
+    # Tools sharing a serial_group execute one at a time, in the order the model
+    # emitted them; None (default) means the tool is safe to run concurrently.
+    serial_group: str | None = None
     # Populated by ToolContext-free tools that want extra metadata later; unused v0.
     metadata: dict[str, Any] = field(default_factory=dict)
 

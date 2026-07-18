@@ -415,3 +415,152 @@ async def test_intermediate_text_fires_hook(make_orchestrator: Build, hooks: Hoo
     )
     await orch.run("go", [], system_prompt="sys")
     assert seen == ["let me check"]
+
+
+# ── serial groups ────────────────────────────────────────────────────────────
+
+
+async def test_serial_group_runs_in_emission_order_without_overlap(
+    make_orchestrator: Build, registry: ToolRegistry
+) -> None:
+    # Two calls to a serialized tool must not interleave: the yields inside the
+    # handler give the event loop every chance to start the second call early.
+    events: list[str] = []
+
+    async def sbx(inp: dict[str, Any], ctx: ToolContext) -> ToolResult:
+        tag = inp["tag"]
+        events.append(f"start:{tag}")
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        events.append(f"end:{tag}")
+        return ToolResult(tool_use_id="", content=tag)
+
+    registry.register(make_tool("sbx", sbx, serial_group="g"))
+    orch, client = make_orchestrator(
+        [
+            assistant_tool_use(
+                ("toolu_a", "sbx", {"tag": "a"}),
+                ("toolu_b", "sbx", {"tag": "b"}),
+            ),
+            assistant_text("done"),
+        ]
+    )
+    await orch.run("go", [], system_prompt="sys")
+    assert events == ["start:a", "end:a", "start:b", "end:b"]
+
+
+async def test_serial_group_first_failure_does_not_skip_successor(
+    make_orchestrator: Build, registry: ToolRegistry
+) -> None:
+    ran: list[str] = []
+
+    async def first(inp: dict[str, Any], ctx: ToolContext) -> ToolResult:
+        raise RuntimeError("first died")
+
+    async def second(inp: dict[str, Any], ctx: ToolContext) -> ToolResult:
+        ran.append("second")
+        return ToolResult(tool_use_id="", content="ok")
+
+    registry.register(make_tool("first", first, serial_group="g"))
+    registry.register(make_tool("second", second, serial_group="g"))
+    orch, client = make_orchestrator(
+        [
+            assistant_tool_use(("toolu_1", "first", {}), ("toolu_2", "second", {})),
+            assistant_text("done"),
+        ]
+    )
+    history: list[Message] = []
+    await orch.run("go", history, system_prompt="sys")
+    assert ran == ["second"]  # a failed predecessor never skips its successor
+    blocks = [b for b in history[2].content if isinstance(b, ToolResultBlock)]
+    assert [b.tool_use_id for b in blocks] == ["toolu_1", "toolu_2"]
+    assert [b.is_error for b in blocks] == [True, False]
+
+
+async def test_parallel_tool_runs_alongside_serial_chain(
+    make_orchestrator: Build, registry: ToolRegistry
+) -> None:
+    # The serialized tool blocks until the parallel-safe tool sets an event: if
+    # serialization ever captured unrelated tools into the chain, this deadlocks
+    # (and the wait_for turns that into a loud failure).
+    gate = asyncio.Event()
+
+    async def waiter(inp: dict[str, Any], ctx: ToolContext) -> ToolResult:
+        await asyncio.wait_for(gate.wait(), timeout=2)
+        return ToolResult(tool_use_id="", content="unblocked")
+
+    async def opener(inp: dict[str, Any], ctx: ToolContext) -> ToolResult:
+        gate.set()
+        return ToolResult(tool_use_id="", content="opened")
+
+    registry.register(make_tool("waiter", waiter, serial_group="g"))
+    registry.register(make_tool("opener", opener))
+    orch, client = make_orchestrator(
+        [
+            assistant_tool_use(("toolu_1", "waiter", {}), ("toolu_2", "opener", {})),
+            assistant_text("done"),
+        ]
+    )
+    history: list[Message] = []
+    result = await orch.run("go", history, system_prompt="sys")
+    assert result == "done"
+    blocks = [b for b in history[2].content if isinstance(b, ToolResultBlock)]
+    assert all(not b.is_error for b in blocks)
+
+
+async def test_mixed_batch_preserves_result_order(
+    make_orchestrator: Build, registry: ToolRegistry
+) -> None:
+    async def sbx(inp: dict[str, Any], ctx: ToolContext) -> ToolResult:
+        return ToolResult(tool_use_id="", content=str(inp.get("tag", "")))
+
+    registry.register(make_tool("sbx", sbx, serial_group="g"))
+    orch, client = make_orchestrator(
+        [
+            assistant_tool_use(
+                ("toolu_a", "sbx", {"tag": "a"}),
+                ("toolu_b", "echo", {"text": "b"}),
+                ("toolu_c", "sbx", {"tag": "c"}),
+            ),
+            assistant_text("done"),
+        ]
+    )
+    history: list[Message] = []
+    await orch.run("go", history, system_prompt="sys")
+    blocks = [b for b in history[2].content if isinstance(b, ToolResultBlock)]
+    assert [b.tool_use_id for b in blocks] == ["toolu_a", "toolu_b", "toolu_c"]
+
+
+async def test_cancel_mid_serial_chain_aborts_queued_successor(
+    make_orchestrator: Build, registry: ToolRegistry
+) -> None:
+    # The first serialized call requests stop then blocks; its queued successor
+    # never started. Both must render as [ABORTED], in emission order.
+    orch_holder: dict[str, Orchestrator] = {}
+    ran: list[str] = []
+
+    async def slow(inp: dict[str, Any], ctx: ToolContext) -> ToolResult:
+        orch_holder["orch"].request_stop()
+        await asyncio.sleep(10)  # cancelled before this completes
+        return ToolResult(tool_use_id="", content="never")
+
+    async def queued(inp: dict[str, Any], ctx: ToolContext) -> ToolResult:
+        ran.append("queued")
+        return ToolResult(tool_use_id="", content="never")
+
+    registry.register(make_tool("slow", slow, serial_group="g"))
+    registry.register(make_tool("queued", queued, serial_group="g"))
+    orch, client = make_orchestrator(
+        [
+            assistant_tool_use(("toolu_1", "slow", {}), ("toolu_2", "queued", {})),
+            assistant_text("unreachable"),
+        ]
+    )
+    orch_holder["orch"] = orch
+    history: list[Message] = []
+    result = await orch.run("go", history, system_prompt="sys")
+    assert result == "Stopping."
+    assert ran == []  # the queued successor never slipped into execution
+    blocks = [b for b in history[2].content if isinstance(b, ToolResultBlock)]
+    assert [b.tool_use_id for b in blocks] == ["toolu_1", "toolu_2"]
+    assert all(b.is_error and "ABORTED" in b.content for b in blocks)

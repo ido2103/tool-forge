@@ -73,16 +73,19 @@ Runtime configuration comes from `.env` via `src/toolforge/config.py`
   Now also expose a provider-neutral error taxonomy (`TransientProviderError` /
   `PermanentProviderError`) translated at the `send()` boundary.
 - **orchestrator** — v0 agent loop: ReAct send→tools→repeat with the full
-  `stop_reason` state machine, concurrent tool execution, graceful cancellation, a
+  `stop_reason` state machine, concurrent tool execution (with per-`serial_group`
+  FIFO chaining for tools that share state), graceful cancellation, a
   transient-retry, a wrap-up-on-cap, lifecycle hooks, and per-run JSONL transcripts. A
   stdlib streaming **REPL** (`toolforge` console script) drives it. The wall detector,
   spec/skill authoring, and satisfaction review are still to come.
 - **registry** — v0 instance `ToolRegistry`: live add/replace (schemas re-read every
   iteration → tools grow mid-task) + the XML tool-result safety envelope. Spec/test
   storage, retrieval-before-forge, and the curator are future slices.
-- **sandbox** — v0 Docker-contained `run_bash` seed tool (lazy container, `/workspace`
-  mount, config-toggleable network, output caps). The spec's generated-code isolation
-  (no-network-default, domain allowlists, credential logging) is future work.
+- **sandbox** — v0 Docker-contained `run_bash` seed tool (container started eagerly
+  at REPL boot with a lock-guarded fallback, `/workspace` mount, config-toggleable
+  network, output caps, serialized via the `"sandbox"` group). The spec's
+  generated-code isolation (no-network-default, domain allowlists, credential
+  logging) is future work.
 - **forge** — orchestrator interface stubbed: `forge_tool` (spec → candidate, never
   registers) and `register_tool` (promotes after the orchestrator's holdout check),
   sharing an in-memory `CandidateStore`. Both fully validate input and return a guided
@@ -91,7 +94,8 @@ Runtime configuration comes from `.env` via `src/toolforge/config.py`
 
 **How it wires together today:** the REPL builds an `AnthropicClient`, a `BashSandbox`
 + `ToolRegistry` (with `run_bash`, `forge_tool`, and `register_tool` bound to a shared
-`CandidateStore` and the live registry), a `HookManager`, and a `Transcript`, then hands
+`CandidateStore` and the live registry), a `HookManager`, and a `Transcript`, starts
+the sandbox container eagerly (failing loudly at boot if Docker is down), then hands
 them to the `Orchestrator`. Each turn the loop re-reads the registry's schemas, calls the
 provider, and dispatches tool calls into the sandbox. This is the spine the forge, wall
 detector, skills, and evals will hang off.

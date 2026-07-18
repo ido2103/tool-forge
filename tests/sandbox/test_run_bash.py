@@ -24,6 +24,12 @@ def test_schema_requires_command(sandbox_settings: SandboxSettings) -> None:
     assert "command" in tool.input_schema["properties"]
 
 
+def test_run_bash_is_in_sandbox_serial_group(sandbox_settings: SandboxSettings) -> None:
+    # Sandbox-backed tools share one /workspace: batch calls must run FIFO.
+    tool = _tool_with([], sandbox_settings)
+    assert tool.serial_group == "sandbox"
+
+
 # ── trust follows the network posture ────────────────────────────────────────
 
 

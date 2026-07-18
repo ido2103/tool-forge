@@ -29,6 +29,24 @@ class FakeRunner:
         return item
 
 
+class BlockingStartRunner(FakeRunner):
+    """FakeRunner whose ``docker run`` blocks until released.
+
+    The plain FakeRunner never yields to the event loop, so it cannot reproduce
+    the cold-start race: two callers must genuinely overlap inside ``start()``
+    for the lock to matter.
+    """
+
+    def __init__(self, results: list[tuple[int | None, bytes] | BaseException]) -> None:
+        super().__init__(results)
+        self.release = asyncio.Event()
+
+    async def __call__(self, argv: list[str], *, timeout: int | None) -> tuple[int | None, bytes]:
+        if argv[:2] == ["docker", "run"]:
+            await self.release.wait()
+        return await super().__call__(argv, timeout=timeout)
+
+
 def _sandbox(runner: FakeRunner, sandbox_settings: SandboxSettings) -> BashSandbox:
     return BashSandbox(sandbox_settings, runner=runner)
 
@@ -115,6 +133,62 @@ async def test_start_failure_raises(sandbox_settings: SandboxSettings) -> None:
     sb = _sandbox(runner, sandbox_settings)
     with pytest.raises(RuntimeError, match="failed to start sandbox container"):
         await sb.run("true")
+
+
+async def test_eager_start_failure_raises(sandbox_settings: SandboxSettings) -> None:
+    runner = FakeRunner([(1, b"docker daemon not running")])
+    sb = _sandbox(runner, sandbox_settings)
+    with pytest.raises(RuntimeError, match="failed to start sandbox container"):
+        await sb.start()
+
+
+async def test_concurrent_cold_start_issues_one_docker_run(
+    sandbox_settings: SandboxSettings,
+) -> None:
+    # The exact production failure: two run_bash calls in one batch hit a cold
+    # sandbox. Without the start lock both issue `docker run --name <same>` and
+    # the second dies with a container-name conflict.
+    runner = BlockingStartRunner([(0, b"started"), (0, b"a"), (0, b"b")])
+    sb = _sandbox(runner, sandbox_settings)
+    t1 = asyncio.create_task(sb.run("echo a"))
+    t2 = asyncio.create_task(sb.run("echo b"))
+    await asyncio.sleep(0)  # both tasks are now inside start()/awaiting the lock
+    runner.release.set()
+    results = await asyncio.gather(t1, t2)
+    assert [r.exit_code for r in results] == [0, 0]
+    starts = [c for c in runner.calls if c[:2] == ["docker", "run"]]
+    assert len(starts) == 1
+
+
+async def test_start_idempotent(sandbox_settings: SandboxSettings) -> None:
+    runner = FakeRunner([(0, b"started")])
+    sb = _sandbox(runner, sandbox_settings)
+    await sb.start()
+    await sb.start()
+    assert len(runner.calls) == 1
+
+
+async def test_eager_start_then_run_starts_once(sandbox_settings: SandboxSettings) -> None:
+    runner = FakeRunner([(0, b"started"), (0, b"hi\n")])
+    sb = _sandbox(runner, sandbox_settings)
+    await sb.start()
+    result = await sb.run("echo hi")
+    assert result.exit_code == 0
+    starts = [c for c in runner.calls if c[:2] == ["docker", "run"]]
+    assert len(starts) == 1
+    assert len(runner.calls) == 2
+
+
+async def test_start_after_teardown_restarts(sandbox_settings: SandboxSettings) -> None:
+    # The /reset contract: teardown recycles the container and the next start
+    # (or run) brings up a fresh one.
+    runner = FakeRunner([(0, b"started"), (0, b"restarted"), (0, b"ok")])
+    sb = _sandbox(runner, sandbox_settings)
+    await sb.start()
+    sb.teardown()
+    await sb.run("true")
+    starts = [c for c in runner.calls if c[:2] == ["docker", "run"]]
+    assert len(starts) == 2
 
 
 async def test_teardown_idempotent_before_start(sandbox_settings: SandboxSettings) -> None:

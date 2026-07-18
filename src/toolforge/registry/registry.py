@@ -51,6 +51,15 @@ class ToolRegistry:
         tool = self._tools.get(name)
         return tool.trust if tool is not None else "TRUSTED"
 
+    def serial_group_for(self, name: str) -> str | None:
+        """Serialization group for *name*; ``None`` means parallel-safe.
+
+        Unknown names fall back to ``None`` — the only work an unregistered tool
+        does is produce a fast harness error result, safe to run concurrently.
+        """
+        tool = self._tools.get(name)
+        return tool.serial_group if tool is not None else None
+
     def get_schemas(self) -> list[dict[str, Any]]:
         """The Anthropic-shape tool defs for the model.
 

@@ -1,7 +1,8 @@
 # Sandbox
 
-**Status: v0 implemented — Docker-contained `run_bash` with a pipefail shell.
-Per-tool domain allowlists, no-network-default for generated code, and
+**Status: v0 implemented — Docker-contained `run_bash` with a pipefail shell,
+eager container start, and serialized execution via the `"sandbox"` serial
+group. Per-tool domain allowlists, no-network-default for generated code, and
 credential logging are future slices.**
 
 All generated code runs here — never on the host.
@@ -10,8 +11,13 @@ All generated code runs here — never on the host.
 
 - **`BashSandbox`** (`bash.py`) — manages one Docker container:
   - **Image** `python:3.12-slim` (config: `TOOLFORGE_SANDBOX_IMAGE`), started
-    **lazily** on the first command via `docker run -d … sleep infinity`, and
-    **persistent for the sandbox object's lifetime** (the REPL process).
+    **eagerly at REPL boot** via `start()` (`docker run -d … sleep infinity`) —
+    Docker being down is a clear boot-time failure, not a mid-task surprise —
+    and **persistent for the sandbox object's lifetime** (the REPL process).
+    `start()` is idempotent and lock-guarded, so concurrent cold callers can
+    never race to `docker run` the same container name; `run()` keeps a
+    lock-guarded on-demand fallback (`_ensure_started`), which is what restarts
+    the container after `/reset` or when `BashSandbox` is used bare.
   - Each command runs `docker exec <name> bash -o pipefail -lc <command>` — a
     **fresh shell per call**, so `cd`/env do not persist. The tool description
     tells the model to use absolute paths. `pipefail` makes a failure anywhere
@@ -30,7 +36,12 @@ All generated code runs here — never on the host.
   - **`teardown()`** force-removes the container (`docker rm -f`); idempotent,
     best-effort, synchronous so it runs from the REPL's `atexit`.
 - **`run_bash`** (`run_bash.py`) — `build_run_bash(sandbox)` returns the seed
-  tool. It validates `command`/`timeout`, runs the command, and formats
+  tool, registered in serial group **`SANDBOX_SERIAL_GROUP` (`"sandbox"`)**: all
+  sandbox-backed tools share one container and one `/workspace`, so the
+  orchestrator runs their calls one at a time, in emission order
+  ([orchestrator.md](orchestrator.md)) — a parallel write-then-run pair from the
+  model cannot race. Forged tools that execute in the sandbox reuse this group.
+  It validates `command`/`timeout`, runs the command, and formats
   `output + [exit code: N]`, marking a nonzero exit or a timeout as `is_error` —
   **except exit 141 (SIGPIPE)**, which under `pipefail` is what a producer
   reports when an early-exiting consumer (`… | head`) closes the pipe after
