@@ -18,9 +18,9 @@ reviewers.
 3. **Granularity principle** — new tools and modules should be composable
    primitives, not task-specific mega-tools (CLAUDE.md contract 2). Flag
    designs that bundle multiple concerns into one interface.
-4. **Type safety** — code must pass strict mypy. Flag `Any` leaking through
-   public signatures, missing annotations on public functions, and
-   `# type: ignore` without a specific error code.
+4. **Type safety** — flag `Any` leaking through public signatures, missing
+   annotations on public functions, and `# type: ignore` without a specific
+   error code. (Strict mypy itself runs in pre-commit and CI, not here.)
 5. **Test coverage** — new behavior needs tests, and adversarial cases matter
    more than happy paths here: this project's premise is that adversarial
    tests are what make generated code trustworthy.
@@ -29,8 +29,9 @@ reviewers.
 
 ## What not to flag
 
-- Formatting or style that ruff / ruff-format already enforces — CI owns that,
-  and duplicate comments are noise.
+- Anything the toolchain already enforces — ruff formatting and lint, strict
+  mypy, the pytest suite. Pre-commit and CI own those; reviewing is reading,
+  so there is nothing to run and nothing to say about not having run them.
 - Nitpicks that contradict the existing idiom of the surrounding code.
 - Missing docstrings or comments, unless the code is genuinely unreadable
   without them.

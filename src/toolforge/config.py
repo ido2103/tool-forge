@@ -9,7 +9,7 @@ variable and its default. No YAML layer — add one only if config outgrows
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Literal, Self
+from typing import ClassVar, Literal, Self
 
 from pydantic import AliasChoices, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -73,6 +73,42 @@ class WorkerSettings(BaseSettings):
     @property
     def base_url(self) -> str:
         return f"http://{self.host}:{self.port}/v1"
+
+
+class TestAuthorSettings(BaseSettings):
+    """Forge test-author knobs: model override plus the authoring-loop budget.
+
+    The test author is frontier-tier by design (it writes the adversarial tests
+    the worker must satisfy); ``model=None`` means "use the orchestrator's
+    model", which preserves the author-vs-worker cross-model invariant without
+    a second credentials path.
+    """
+
+    # The Test* name matches pytest's collection convention; opt out explicitly.
+    __test__: ClassVar[bool] = False
+
+    model_config = SettingsConfigDict(
+        env_prefix="TOOLFORGE_TEST_AUTHOR_",
+        env_file=".env",
+        extra="ignore",
+        populate_by_name=True,
+    )
+
+    model: str | None = None
+    max_attempts: int = 3
+    max_tokens: int = 16_000
+    min_tests: int = 5
+    # Wall-clock ceiling for one author_tests() call: every model call and
+    # sandbox command checks the deadline before starting, so overshoot is
+    # bounded by the longest single step.
+    timeout_seconds: int = 1500
+
+    @field_validator("max_attempts", "max_tokens", "min_tests", "timeout_seconds")
+    @classmethod
+    def _positive(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("must be > 0")
+        return v
 
 
 class OrchestratorSettings(BaseSettings):

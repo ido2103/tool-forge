@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from toolforge.forge import Candidate, CandidateStore
+from toolforge.forge import Candidate, CandidateStore, ToolSpec
 
 
 def _candidate(name: str = "fetch_rss", behavior: str = "fetches a feed") -> Candidate:
@@ -51,3 +51,35 @@ def test_pop_removes() -> None:
 def test_pop_missing_raises() -> None:
     with pytest.raises(KeyError):
         CandidateStore().pop("nope")
+
+
+def test_tool_spec_from_validated_input() -> None:
+    spec = ToolSpec.from_validated_input(
+        {
+            "gap_analysis": "not carried over",
+            "name": "fetch_rss",
+            "description": "Fetch an RSS feed.",
+            "input_schema": {"type": "object", "properties": {}},
+            "behavior": "Returns entries.",
+            "allowed_domains": ["example.com"],
+            "examples": [{"input": {}, "output": "[]"}],
+        }
+    )
+    assert spec.name == "fetch_rss"
+    assert spec.allowed_domains == ("example.com",)
+    assert spec.examples == ({"input": {}, "output": "[]"},)
+    assert not hasattr(spec, "gap_analysis")
+
+
+def test_tool_spec_from_validated_input_defaults() -> None:
+    spec = ToolSpec.from_validated_input(
+        {
+            "name": "fetch_rss",
+            "description": "d",
+            "input_schema": {"type": "object", "properties": {}},
+            "behavior": "b",
+            "allowed_domains": None,
+        }
+    )
+    assert spec.allowed_domains == ()
+    assert spec.examples == ()

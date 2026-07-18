@@ -103,6 +103,8 @@ class FakeProviderClient:
                 "tools": tools,
                 "system": system,
                 "max_tokens": max_tokens,
+                "model": model,
+                "component": component,
             }
         )
         if not self._script:

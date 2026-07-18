@@ -1,8 +1,8 @@
 # Forge
 
-**Status: `register_tool` implemented — promotion into a persistent read-only tool
-store, sandbox execution via a harness-owned runner, and boot-time reload.
-`forge_tool` remains stubbed pending the internal build loop (test author + worker).**
+**Status: `register_tool` and the adversarial test author implemented.
+`forge_tool` remains stubbed pending the forge worker loop, which will wire the
+test author in.**
 
 Turns a tool spec from the orchestrator into a verified, registered tool. Exposed to the
 orchestrator as **two composable tools** (`src/toolforge/forge/tools.py`): `forge_tool`
@@ -119,11 +119,54 @@ The worker's **iteration budget is configuration, not a tool parameter** — del
 kept out of the schema so a failed forge is answered with a better spec, not a bigger
 budget.
 
+## Test author
+
+The first stage of the build loop (`src/toolforge/forge/test_author.py`,
+implemented): `TestAuthor.author_tests(spec)` turns a `ToolSpec` (the validated
+`forge_tool` input minus `gap_analysis`) into a pytest file at
+`/workspace/build/<name>/test_tool.py` and a red-suite report — the contract the
+worker slice will implement against.
+
+- **Model**: frontier-tier by design; defaults to the orchestrator's model and
+  client instance (`TOOLFORGE_TEST_AUTHOR_MODEL` overrides). The cross-model
+  invariant is author-vs-worker, so sharing the orchestrator's model is fine.
+  Calls are attributed to the usage hook as `component="test_author"`.
+- **Prompt protocol**: the model must emit a numbered edge-case analysis
+  *before* the code (reasoning precedes what it justifies), then exactly one
+  fenced ```python block (plain source, never JSON-escaped code).
+- **Validation pipeline**, all mechanical: static screen (offline/deterministic
+  imports only, must `from tool import run`) → `pytest --collect-only` in the
+  sandbox (syntax + at least `min_tests` tests) → a `pytest -v` run against a
+  stub `tool.py` whose `run()` raises `NotImplementedError`. The suite is
+  accepted only when that run is *all-red through run() itself*: a test that
+  passes against the stub asserts nothing about real behavior (vacuous), and a
+  test that ERRORs before reaching run() (broken fixture, test-internal bug)
+  could never be satisfied by any implementation — both are rejected by name.
+  On success the stub is deleted so it can never be mistaken for a built
+  artifact.
+- **Retries are fix-in-context**: each rejection appends targeted feedback to
+  the same conversation (the failing output, the vacuous test names) under a
+  config-driven attempt budget — bounded in code, not prompt.
+- **Budgets** (`TOOLFORGE_TEST_AUTHOR_*`): `MAX_ATTEMPTS` (default 3),
+  `MAX_TOKENS` per call (16000), `MIN_TESTS` (5), and `TIMEOUT_SECONDS` (1500) —
+  a wall-clock deadline checked before every model call and sandbox command, so
+  overshoot is bounded by the longest single step. On any terminal failure the
+  `build/<name>/` directory is removed and a `TestAuthorError` carries the last
+  failure for the orchestrator.
+- **Files are written host-side** (like promotion) into the bind-mounted
+  workspace; only pytest execution runs in the container. pytest itself is
+  lazily `pip install`ed once per container (the sandbox image ships without
+  it), which requires sandbox network "on" at forge time.
+- **Networked specs** (non-empty `allowed_domains`): v1 keeps the tests fully
+  offline — the author is instructed to test only offline-verifiable behavior
+  (argument validation, error contract, output shaping).
+
 ## Loop (from [spec](spec.md))
 
 1. Receive the spec for the missing capability (see interface above).
-2. A frontier model writes **adversarial tests from the spec only**, before any
-   implementation exists (TDD).
+2. **Implemented** (see "Test author" above): a frontier model writes
+   **adversarial tests from the spec only**, before any implementation exists
+   (TDD).
 3. The forge worker (configurable backend, see below) implements against those tests
    inside a harness, iterating until green.
    - Worker has a **docs-RAG tool** to retrieve real API docs while coding — compensates
