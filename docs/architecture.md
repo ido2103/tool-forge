@@ -44,6 +44,8 @@ separation mitigates the self-verification trap.
 5. Green tests ≠ done: orchestrator runs a holdout check (unseen cases or spec-conformance review).
 6. Tool + spec + tests registered with a companion usage skill; the harness appends the
    new tool schema to subsequent orchestrator calls (the model never edits its own payload).
+   Registration is an explicit orchestrator-driven `register_tool` call, gated on
+   holdout evidence (the companion usage skill is still future work).
 
 v1 forges **mid-task** (pause, build, resume); post-mortem forging is v2.
 
@@ -81,11 +83,18 @@ Runtime configuration comes from `.env` via `src/toolforge/config.py`
 - **sandbox** — v0 Docker-contained `run_bash` seed tool (lazy container, `/workspace`
   mount, config-toggleable network, output caps). The spec's generated-code isolation
   (no-network-default, domain allowlists, credential logging) is future work.
+- **forge** — orchestrator interface stubbed: `forge_tool` (spec → candidate, never
+  registers) and `register_tool` (promotes after the orchestrator's holdout check),
+  sharing an in-memory `CandidateStore`. Both fully validate input and return a guided
+  not-implemented error; the internal build loop (test author + worker) is the next
+  slice. See [forge.md](forge.md).
 
 **How it wires together today:** the REPL builds an `AnthropicClient`, a `BashSandbox`
-+ `ToolRegistry` (with `run_bash`), a `HookManager`, and a `Transcript`, then hands them
-to the `Orchestrator`. Each turn the loop re-reads the registry's schemas, calls the
++ `ToolRegistry` (with `run_bash`, `forge_tool`, and `register_tool` bound to a shared
+`CandidateStore` and the live registry), a `HookManager`, and a `Transcript`, then hands
+them to the `Orchestrator`. Each turn the loop re-reads the registry's schemas, calls the
 provider, and dispatches tool calls into the sandbox. This is the spine the forge, wall
 detector, skills, and evals will hang off.
 
-**Skeleton only:** forge, skills, evals. Update this section as subsystems land.
+**Skeleton only:** skills, evals; the forge's internal build loop. Update this section
+as subsystems land.

@@ -19,6 +19,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from toolforge.config import AnthropicSettings, OrchestratorSettings, SandboxSettings
+from toolforge.forge import CandidateStore, build_forge_tool, build_register_tool
 from toolforge.orchestrator.hooks import HookEvent, HookManager
 from toolforge.orchestrator.loop import Orchestrator
 from toolforge.orchestrator.prompts import load_system_prompt
@@ -87,6 +88,9 @@ def _build(
 
     registry = ToolRegistry(ToolContext())
     registry.register(build_run_bash(sandbox))
+    candidates = CandidateStore()
+    registry.register(build_forge_tool(candidates, registry))
+    registry.register(build_register_tool(candidates, registry))
 
     hooks = HookManager()
     _install_tool_oneliners(hooks)
