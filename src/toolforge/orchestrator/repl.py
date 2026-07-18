@@ -16,6 +16,8 @@ import signal
 import sys
 from typing import Any
 
+from pydantic import ValidationError
+
 from toolforge.config import AnthropicSettings, OrchestratorSettings, SandboxSettings
 from toolforge.orchestrator.hooks import HookEvent, HookManager
 from toolforge.orchestrator.loop import Orchestrator
@@ -175,7 +177,19 @@ def main() -> None:
         help="A one-shot task to run. Omit for an interactive session.",
     )
     args = parser.parse_args()
-    asyncio.run(_amain(args))
+    try:
+        asyncio.run(_amain(args))
+    except ValidationError as exc:
+        # Almost always missing/invalid credentials or sandbox config.
+        print(
+            f"Configuration error:\n{exc}\n\n"
+            "Copy .env.example to .env and fill in your credentials "
+            "(see TOOLFORGE_ANTHROPIC_* / ANTHROPIC_API_KEY).",
+            file=sys.stderr,
+        )
+        raise SystemExit(1) from exc
+    except KeyboardInterrupt:
+        raise SystemExit(130) from None
 
 
 if __name__ == "__main__":
