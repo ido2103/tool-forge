@@ -83,6 +83,16 @@ class BashSandbox:
     def container_name(self) -> str:
         return self._container_name
 
+    @property
+    def network_enabled(self) -> bool:
+        """Whether the container can reach the network.
+
+        Determines the trust level of this sandbox's output: with the network up,
+        any command can pull external text (``curl``, ``pip``) into its stdout, so
+        results must be quarantined as UNVERIFIED. See ``run_bash.py``.
+        """
+        return self._settings.network == "on"
+
     def _run_argv(self) -> list[str]:
         argv = ["docker", "run", "-d", "--name", self._container_name]
         if self._settings.network == "none":

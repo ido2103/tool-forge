@@ -27,10 +27,25 @@ All generated code runs here — never on the host.
     a head+tail truncation notice that steers toward grep/head/tail.
   - **`teardown()`** force-removes the container (`docker rm -f`); idempotent,
     best-effort, synchronous so it runs from the REPL's `atexit`.
-- **`run_bash`** (`run_bash.py`) — `build_run_bash(sandbox)` returns the
-  `TRUSTED` seed tool. It validates `command`/`timeout`, runs the command, and
-  formats `output + [exit code: N]`, marking a nonzero exit or a timeout as
-  `is_error`.
+- **`run_bash`** (`run_bash.py`) — `build_run_bash(sandbox)` returns the seed
+  tool. It validates `command`/`timeout`, runs the command, and formats
+  `output + [exit code: N]`, marking a nonzero exit or a timeout as `is_error`.
+
+### Trust follows the network posture
+
+`run_bash`'s trust level is **derived from `sandbox.network_enabled`, not
+hardcoded**. The distinction that matters is *code* vs *output*: the tool's code
+is hand-written and trusted, but its stdout is whatever the command produced.
+
+| `TOOLFORGE_SANDBOX_NETWORK` | trust | why |
+|---|---|---|
+| `on` (default) | `UNVERIFIED` | `curl`/`pip`/any fetch can pipe attacker-controlled text into stdout and thus into context, so results carry the prompt-injection envelope |
+| `none` | `TRUSTED` | the container cannot reach out, so output stays unwrapped and avoids the warning's token cost on every call |
+
+This keeps the code aligned with [registry.md](registry.md)'s rule that anything
+touching the outside world is `UNVERIFIED`. Note the cost trade: the networked
+default pays ~80 tokens of warning per tool call, which is the honest price of a
+shell that can reach the internet.
 
 ### Divergences from the spec (deliberate, v0)
 

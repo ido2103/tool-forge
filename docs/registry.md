@@ -31,10 +31,15 @@ tool mid-task the model can call it on the very next turn. This is the mechanism
 
 `execute` wraps string tool output via `wrap_tool_result` before it re-enters context:
 
-- `TRUSTED` (hand-written seed tools): plain `<tool_result tool="…" trust="TRUSTED">…</tool_result>`.
+- `TRUSTED`: plain `<tool_result tool="…" trust="TRUSTED">…</tool_result>`.
 - `UNVERIFIED` (forged tools; anything touching the outside world): adds a
   `<prompt_injection_warning>` and an `<external_content>` boundary so the model treats
   the payload as data, not instructions.
+
+Trust is a property of a tool's **output**, not of who wrote its code. A hand-written
+tool that can reach the network returns externally-authored bytes and is therefore
+`UNVERIFIED` — see `run_bash`, whose trust is derived from the sandbox's network
+posture ([sandbox.md](sandbox.md#trust-follows-the-network-posture)).
 
 List (multimodal) content passes through unwrapped. `execute` raises `KeyError` on an
 unknown tool name; the loop converts that into an `is_error` result so a hallucinated

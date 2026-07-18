@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from toolforge.registry import RegisteredTool, ToolContext, ToolResult
+from toolforge.registry import RegisteredTool, ToolContext, ToolResult, Trust
 from toolforge.sandbox.bash import BashSandbox
 
 _DESCRIPTION = """\
@@ -52,7 +52,17 @@ _INPUT_SCHEMA: dict[str, Any] = {
 
 
 def build_run_bash(sandbox: BashSandbox) -> RegisteredTool:
-    """Build the ``run_bash`` RegisteredTool bound to *sandbox*."""
+    """Build the ``run_bash`` RegisteredTool bound to *sandbox*.
+
+    Trust is derived from the sandbox's network posture rather than hardcoded.
+    The *code* is hand-written and trusted, but the *output* is not: with the
+    network up, ``curl``/``pip``/any fetch can pipe attacker-controlled text into
+    stdout and thus into context. Per docs/registry.md, anything touching the
+    outside world is UNVERIFIED, so results get the prompt-injection envelope.
+    With ``network="none"`` the container cannot reach out, so output stays
+    TRUSTED and avoids paying the warning's token cost on every call.
+    """
+    trust: Trust = "UNVERIFIED" if sandbox.network_enabled else "TRUSTED"
 
     async def handler(inp: dict[str, Any], ctx: ToolContext) -> ToolResult:
         command = inp.get("command")
@@ -84,5 +94,5 @@ def build_run_bash(sandbox: BashSandbox) -> RegisteredTool:
         description=_DESCRIPTION,
         input_schema=_INPUT_SCHEMA,
         handler=handler,
-        trust="TRUSTED",
+        trust=trust,
     )
