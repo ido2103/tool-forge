@@ -179,9 +179,14 @@ class Orchestrator:
         tool_calls: list[ToolCall],
         cancel_event: asyncio.Event | None = None,
     ) -> list[ToolResult]:
-        """Run tools concurrently. On cancel, fire cancel-handlers and synthesize
+        """Run tools concurrently; tools sharing a ``serial_group`` run FIFO.
+
+        Calls whose tool declares a ``serial_group`` are chained so they execute
+        one at a time, in the order the model emitted them; everything else runs
+        fully in parallel. On cancel, fire cancel-handlers and synthesize
         ``[ABORTED]`` results. A handler that raises becomes an ``is_error`` result;
-        it never aborts the loop.
+        it never aborts the loop, and a failed predecessor never skips its
+        successors in a serial chain.
         """
         if not tool_calls:
             return []
@@ -243,7 +248,24 @@ class Orchestrator:
                     is_error=True,
                 )
 
-        tasks = {tc.id: asyncio.create_task(_run_one(tc)) for tc in tool_calls}
+        async def _run_after(pred: asyncio.Task[ToolResult] | None, tc: ToolCall) -> ToolResult:
+            if pred is not None:
+                # wait() never re-raises the predecessor's outcome — a failed or
+                # aborted predecessor must not poison its successor, which still
+                # runs (or is itself cancelled by the cancel branch below).
+                await asyncio.wait({pred})
+            return await _run_one(tc)
+
+        tasks: dict[str, asyncio.Task[ToolResult]] = {}
+        prev_in_group: dict[str, asyncio.Task[ToolResult]] = {}
+        for tc in tool_calls:
+            group = self._registry.serial_group_for(tc.name)
+            if group is None:
+                tasks[tc.id] = asyncio.create_task(_run_one(tc))
+            else:
+                task = asyncio.create_task(_run_after(prev_in_group.get(group), tc))
+                prev_in_group[group] = task
+                tasks[tc.id] = task
 
         if cancel_event is not None:
             stop_waiter = asyncio.create_task(cancel_event.wait())

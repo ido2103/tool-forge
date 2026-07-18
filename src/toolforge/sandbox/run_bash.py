@@ -59,6 +59,11 @@ _INPUT_SCHEMA: dict[str, Any] = {
 
 _SIGPIPE_EXIT = 141
 
+# All sandbox-backed tools share one container and one /workspace, so calls in a
+# batch must run one at a time, in emission order (the model writes a file, then
+# runs it). Forged tools that execute in the sandbox reuse this group.
+SANDBOX_SERIAL_GROUP = "sandbox"
+
 
 def build_run_bash(sandbox: BashSandbox) -> RegisteredTool:
     """Build the ``run_bash`` RegisteredTool bound to *sandbox*.
@@ -114,4 +119,5 @@ def build_run_bash(sandbox: BashSandbox) -> RegisteredTool:
         input_schema=_INPUT_SCHEMA,
         handler=handler,
         trust=trust,
+        serial_group=SANDBOX_SERIAL_GROUP,
     )

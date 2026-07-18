@@ -1,6 +1,7 @@
 """Docker-contained bash execution for the run_bash seed tool.
 
-A single ``python:3.12-slim`` container is started lazily on the first command
+A single ``python:3.12-slim`` container is started eagerly at REPL boot (via
+``start()``; a lock-guarded on-demand fallback covers ``/reset`` and direct use)
 and lives for the sandbox object's lifetime (the REPL process). Each command
 runs via ``docker exec bash -o pipefail -lc`` — a *fresh* shell per call, so
 ``cd``/env do not persist, with ``pipefail`` so a failure anywhere in a pipeline
@@ -70,7 +71,7 @@ async def _default_runner(argv: list[str], *, timeout: int | None) -> tuple[int 
 
 
 class BashSandbox:
-    """Manages one lazily-started Docker container for run_bash."""
+    """Manages one Docker container for run_bash (eager start, lazy fallback)."""
 
     def __init__(
         self, settings: SandboxSettings, *, runner: SubprocessRunner | None = None
@@ -79,6 +80,7 @@ class BashSandbox:
         self._runner = runner if runner is not None else _default_runner
         self._container_name = f"toolforge-sbx-{secrets.token_hex(4)}"
         self._started = False
+        self._start_lock = asyncio.Lock()
 
     @property
     def container_name(self) -> str:
@@ -124,16 +126,27 @@ class BashSandbox:
             command,
         ]
 
+    async def start(self) -> None:
+        """Start the container if not already running. Idempotent, concurrency-safe.
+
+        The lock makes the check-then-``docker run`` atomic across the awaits, so
+        concurrent cold callers can never race to create the same container name.
+        """
+        async with self._start_lock:
+            if self._started:
+                return
+            self._settings.workspace_path.mkdir(parents=True, exist_ok=True)
+            exit_code, out = await self._runner(self._run_argv(), timeout=60)
+            if exit_code != 0:
+                raise RuntimeError(
+                    f"failed to start sandbox container: {strip_ansi(out.decode(errors='replace'))}"
+                )
+            self._started = True
+
     async def _ensure_started(self) -> None:
         if self._started:
             return
-        self._settings.workspace_path.mkdir(parents=True, exist_ok=True)
-        exit_code, out = await self._runner(self._run_argv(), timeout=60)
-        if exit_code != 0:
-            raise RuntimeError(
-                f"failed to start sandbox container: {strip_ansi(out.decode(errors='replace'))}"
-            )
-        self._started = True
+        await self.start()
 
     async def run(self, command: str, *, timeout: int | None = None) -> BashResult:
         """Run *command* in the container and return its captured output."""

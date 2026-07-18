@@ -1,10 +1,12 @@
 """Minimal streaming REPL — talk to the orchestrator from a terminal.
 
 ``toolforge "a task"`` runs one task and exits; ``toolforge`` with no argument
-opens an interactive multi-turn session. Thinking streams dimmed, answer text
-plain, and each tool call prints a compact one-liner. Ctrl-C requests a graceful
-stop of the in-flight turn; ``/new`` clears history, ``/reset`` also recycles the
-container, ``/quit`` exits. Stdlib only — no rich/typer.
+opens an interactive multi-turn session. The sandbox container is started
+eagerly at boot — a clear failure if Docker is down, instead of a mid-task
+surprise. Thinking streams dimmed, answer text plain, and each tool call prints
+a compact one-liner. Ctrl-C requests a graceful stop of the in-flight turn;
+``/new`` clears history, ``/reset`` also recycles the container, ``/quit``
+exits. Stdlib only — no rich/typer.
 """
 
 from __future__ import annotations
@@ -133,6 +135,12 @@ async def _amain(args: argparse.Namespace) -> None:
     sandbox_settings = SandboxSettings()
     orch, sandbox, system_prompt = _build(anthropic, orch_settings, sandbox_settings)
 
+    try:
+        await sandbox.start()
+    except RuntimeError as exc:
+        print(f"Sandbox startup failed: {exc}\nIs Docker running?", file=sys.stderr)
+        raise SystemExit(1) from exc
+
     # Ctrl-C requests a graceful stop of the in-flight turn (not a hard exit).
     loop = asyncio.get_running_loop()
     with_signal = False
@@ -165,6 +173,11 @@ async def _amain(args: argparse.Namespace) -> None:
         if user_text == "/reset":
             history.clear()
             sandbox.teardown()
+            try:
+                await sandbox.start()
+            except RuntimeError as exc:
+                # Keep the REPL alive — run() retries the start on next use.
+                print(_style(f"[sandbox restart failed: {exc}]", "31"), file=sys.stderr)
             print(_dim("(history cleared, container recycled)"))
             continue
         await _run_turn(orch, user_text, history, system_prompt)

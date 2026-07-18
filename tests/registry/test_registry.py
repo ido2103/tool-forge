@@ -155,3 +155,15 @@ def test_trust_for_known_and_unknown() -> None:
     assert reg.trust_for("forged_tool") == "UNVERIFIED"
     # Unknown name: only harness-generated error text can exist for it.
     assert reg.trust_for("never_registered") == "TRUSTED"
+
+
+def test_serial_group_for_flagged_unflagged_and_unknown() -> None:
+    reg = ToolRegistry()
+    serialized = _echo_tool("sandboxed")
+    serialized.serial_group = "sandbox"
+    reg.register(serialized)
+    reg.register(_echo_tool("parallel_ok"))
+    assert reg.serial_group_for("sandboxed") == "sandbox"
+    assert reg.serial_group_for("parallel_ok") is None
+    # Unknown name: the only work it does is produce a fast error result.
+    assert reg.serial_group_for("never_registered") is None

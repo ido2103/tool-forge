@@ -57,6 +57,7 @@ def make_tool(
     handler: Callable[[dict[str, Any], ToolContext], Awaitable[ToolResult]],
     *,
     trust: str = "TRUSTED",
+    serial_group: str | None = None,
 ) -> RegisteredTool:
     return RegisteredTool(
         name=name,
@@ -64,6 +65,7 @@ def make_tool(
         input_schema={"type": "object", "properties": {}},
         handler=handler,
         trust=trust,  # type: ignore[arg-type]
+        serial_group=serial_group,
     )
 
 

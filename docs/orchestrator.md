@@ -1,8 +1,8 @@
 # Orchestrator
 
 **Status: v0 loop implemented — ReAct send→tools→repeat with full stop_reason
-handling, cancellation, and transcripts. The wall detector, spec/skill authoring, and
-satisfaction review are not yet built.**
+handling, serial-group tool execution, cancellation, and transcripts. The wall
+detector, spec/skill authoring, and satisfaction review are not yet built.**
 
 The frontier-model brain (Claude Sonnet/Opus via API). Owns every judgment call in the
 system; the forge worker never decides, only implements.
@@ -23,10 +23,16 @@ the loop mutates it in place and mirrors every message to a `Transcript`.
   loop; `refusal` → canned text; anything else → `AgentError`. A **SSE-truncation
   override** promotes a non-`tool_use` stop reason to `tool_use` when the response
   actually carries tool-use blocks (a stream cut off mid-call).
-- **Tool execution** (`_execute_tools`) runs the turn's tool calls concurrently
-  (`asyncio.gather`), re-assembles results in original order, and turns a handler
-  exception or unknown-tool `KeyError` into an `is_error` result — a bad tool never
-  aborts the run. The model-facing error text is `repr(exc)` — **never a traceback**
+- **Tool execution** (`_execute_tools`) runs the turn's tool calls concurrently by
+  default; calls whose tool declares a `serial_group`
+  ([registry.md](registry.md)) are chained per group and run **one at a time, in
+  the order the model emitted them** (`run_bash` and future sandbox-backed tools
+  share the `"sandbox"` group — they mutate one `/workspace`, and a
+  write-then-run pair emitted in parallel must not race). A failed predecessor
+  never skips its successors, groups run concurrently with each other and with
+  parallel-safe tools, and results are re-assembled in original order. A handler
+  exception or unknown-tool `KeyError` becomes an `is_error` result — a bad tool
+  never aborts the run. The model-facing error text is `repr(exc)` — **never a traceback**
   (frames go to the log via `exc_info=True`, not the context window) — and it is:
   - **capped** at `_ERROR_CONTENT_CAP` (4k chars) with a truncation note. Exception
     messages are unbounded in practice (embedded subprocess output, validation dumps,
@@ -38,6 +44,8 @@ the loop mutates it in place and mirrors every message to a `Transcript`.
 - **Cancellation**: `request_stop()` sets a per-run event; the loop checks it at each
   turn boundary and after each send, aborts in-flight tools (firing their
   cancel-handlers), synthesizes `[ABORTED]` tool results, and returns `"Stopping."`.
+  Serialized calls still queued behind a predecessor are cancelled the same way and
+  also render as `[ABORTED]`.
 - **Transient retry**: one long-pause retry on `TransientProviderError` (see
   [providers.md](providers.md#error-taxonomy-basepy)); `PermanentProviderError`
   propagates.

@@ -11,8 +11,12 @@ The growing toolbox: stores each tool's spec, implementation, tests, and usage s
   (not a module-global). `register(tool, *, replace=False)`, `replace(tool)`,
   `unregister(name)`, `has(name)`, `get_schemas()`, `async execute(name, input)`.
 - **`RegisteredTool`** (`types.py`) — `name`, `description`, `input_schema`, async
-  `handler`, and a `trust` level (`TRUSTED` | `UNVERIFIED`). `.schema` renders the
-  Anthropic-shape `{name, description, input_schema}` sent to the model.
+  `handler`, a `trust` level (`TRUSTED` | `UNVERIFIED`), and an optional
+  `serial_group`: tools sharing a group execute one at a time, in the order the
+  model emitted them (`None`, the default, means parallel-safe). The group is a
+  harness-side execution constraint — it never appears in the schema the model
+  sees. `.schema` renders the Anthropic-shape `{name, description, input_schema}`
+  sent to the model.
 - **`ToolContext`** (`types.py`) — per-turn state threaded into handlers: a `turn_id`
   and cancel-handler registration (`register_cancel_handler` / `reset_cancel_handlers`
   / `fire_cancel_handlers`, the last bounded to 2s) so an in-flight tool can be aborted
@@ -50,6 +54,12 @@ tool never got to return — i.e. when the handler *raised*, so `execute` never 
 its wrapping step. Unknown names fall back to `TRUSTED`, because the only content that
 can exist for an unregistered tool is a harness-generated error string with no external
 payload to quarantine.
+
+`serial_group_for(name)` similarly exposes the serialization group the orchestrator's
+`_execute_tools` consults when scheduling a batch
+([orchestrator.md](orchestrator.md)). Unknown names fall back to `None`
+(parallel-safe): the only work an unregistered tool does is produce a fast error
+result.
 
 ## Behavior (from [spec](spec.md)) — not yet implemented
 

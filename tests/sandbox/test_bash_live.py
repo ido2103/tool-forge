@@ -7,6 +7,7 @@ Skips automatically if the docker CLI is unavailable.
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -72,5 +73,26 @@ async def test_real_container_round_trip(tmp_path: Path) -> None:
         #    run_bash description (don't append exit markers), not the shell.
         r5 = await sandbox.run("false; echo done")
         assert r5.exit_code == 0
+    finally:
+        sandbox.teardown()
+
+
+async def test_live_concurrent_cold_start(tmp_path: Path) -> None:
+    # The exact bug from production: two run_bash calls in one batch hit a cold
+    # sandbox and raced to `docker run` the same container name. Both must
+    # succeed, off one container.
+    settings = SandboxSettings(
+        _env_file=None,
+        image="python:3.12-slim",
+        network="none",
+        workspace_path=tmp_path / "workspace",
+        command_timeout=30,
+        output_cap=100_000,
+    )
+    sandbox = BashSandbox(settings)
+    try:
+        r1, r2 = await asyncio.gather(sandbox.run("echo one"), sandbox.run("echo two"))
+        assert r1.exit_code == 0 and "one" in r1.stdout
+        assert r2.exit_code == 0 and "two" in r2.stdout
     finally:
         sandbox.teardown()
