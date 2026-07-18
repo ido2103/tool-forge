@@ -50,3 +50,7 @@ class CandidateStore:
     def pop(self, name: str) -> Candidate:
         """Remove and return a candidate (the promotion path). ``KeyError`` if absent."""
         return self._candidates.pop(name)
+
+    def clear(self) -> None:
+        """Drop every candidate (the ``/reset`` path)."""
+        self._candidates.clear()

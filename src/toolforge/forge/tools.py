@@ -8,20 +8,26 @@ enforces the spec's rule that green tests alone never register a tool — the
 forge grades its own homework, so an independent verification must happen in
 between.
 
-Both handlers fully validate their input (the validation survives into the real
-implementation) and currently return a guided not-implemented error: the
-internal build loop (test author + worker) is a future slice.
+``register_tool`` is fully implemented: it promotes the candidate's artifacts
+into the read-only tool store on disk (see ``promote.py``) and registers a live
+sandbox-executing tool (see ``runtime.py``). ``forge_tool`` validates its input
+and returns a guided not-implemented error: the internal build loop (test
+author + worker) is a future slice.
 """
 
 from __future__ import annotations
 
-import re
 from typing import Any
 
+from toolforge.config import SandboxSettings
 from toolforge.forge.candidates import CandidateStore
+from toolforge.forge.manifest import NAME_RE, validate_input_schema
+from toolforge.forge.promote import PromotionError, promote_candidate
+from toolforge.forge.runtime import build_forged_tool
 from toolforge.registry import RegisteredTool, ToolContext, ToolRegistry, ToolResult
+from toolforge.sandbox import BashSandbox
 
-_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
+_NAME_RE = NAME_RE
 
 _FORGE_DESCRIPTION = """\
 Build a CANDIDATE tool from a spec you author: the forge writes adversarial \
@@ -153,9 +159,10 @@ cases you ran or the review you did, you have not verified the candidate — go 
 verify it.
 - The name must exactly match a candidate previously built by forge_tool in \
 this session; there is no partial matching.
-- Registration is immediate and the registered tool's output will be treated as \
-UNVERIFIED. If verification failed, do not register — revise the spec and \
-re-forge instead."""
+- Registration is immediate: the tool is persisted to the read-only tool store \
+(visible at /tools/<name>/ in the sandbox) and callable from your next turn. \
+It survives restarts. Its output will be treated as UNVERIFIED. If \
+verification failed, do not register — revise the spec and re-forge instead."""
 
 _REGISTER_INPUT_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -183,12 +190,6 @@ _FORGE_NOT_IMPLEMENTED = (
     "identically. Proceed with your existing tools (compose run_bash where possible), "
     "or report to the user that this task needs a capability that cannot be forged yet.]"
 )
-_REGISTER_NOT_IMPLEMENTED = (
-    "[register_tool error: the forge is not yet implemented — no tool was registered. "
-    "Do NOT retry this call; it will fail identically. Proceed with your existing "
-    "tools, or report to the user that this task needs a capability that cannot be "
-    "forged yet.]"
-)
 
 
 def _error(message: str) -> ToolResult:
@@ -197,32 +198,6 @@ def _error(message: str) -> ToolResult:
 
 def _blank(value: Any) -> bool:
     return not isinstance(value, str) or not value.strip()
-
-
-def _validate_input_schema(schema: Any) -> str | None:
-    """Structural sanity of an orchestrator-authored tool schema; reason or ``None``.
-
-    Deliberately hand-rolled: full JSON-Schema validation would need a new
-    dependency, and the API rejects deeper invalidity at registration time anyway.
-    """
-    if not isinstance(schema, dict):
-        return "it is not an object"
-    if schema.get("type") != "object":
-        return "its 'type' must be \"object\""
-    properties = schema.get("properties")
-    if not isinstance(properties, dict):
-        return "it must have a 'properties' object"
-    for prop_name, prop_schema in properties.items():
-        if not isinstance(prop_schema, dict):
-            return f"property {prop_name!r} must be a schema object"
-    required = schema.get("required")
-    if required is not None:
-        if not isinstance(required, list) or not all(isinstance(r, str) for r in required):
-            return "'required' must be a list of property names"
-        for entry in required:
-            if entry not in properties:
-                return f"'required' names undefined property {entry!r}"
-    return None
 
 
 def build_forge_tool(store: CandidateStore, registry: ToolRegistry) -> RegisteredTool:
@@ -247,7 +222,7 @@ def build_forge_tool(store: CandidateStore, registry: ToolRegistry) -> Registere
             )
         if _blank(inp.get("description")):
             return _error("[forge_tool error: 'description' must be a non-empty string]")
-        schema_problem = _validate_input_schema(inp.get("input_schema"))
+        schema_problem = validate_input_schema(inp.get("input_schema"))
         if schema_problem is not None:
             return _error(
                 "[forge_tool error: 'input_schema' must be a JSON Schema object: "
@@ -295,26 +270,65 @@ def build_forge_tool(store: CandidateStore, registry: ToolRegistry) -> Registere
     )
 
 
-def build_register_tool(store: CandidateStore, registry: ToolRegistry) -> RegisteredTool:
-    """Build ``register_tool`` bound to *store* and the live *registry*."""
+def build_register_tool(
+    store: CandidateStore,
+    registry: ToolRegistry,
+    sandbox: BashSandbox,
+    settings: SandboxSettings,
+) -> RegisteredTool:
+    """Build ``register_tool`` bound to *store*, the live *registry*, and the sandbox.
+
+    Promotion is harness-side code: it reads the candidate's artifacts from the
+    host view of the workspace and writes them into the read-only tool store,
+    which is why the agent cannot forge a tool without passing through this
+    tool's checks.
+    """
 
     async def handler(inp: dict[str, Any], ctx: ToolContext) -> ToolResult:
-        if _blank(inp.get("holdout_evidence")):
+        holdout_evidence = inp.get("holdout_evidence")
+        if _blank(holdout_evidence):
             return _error(
                 "[register_tool error: 'holdout_evidence' must be a non-empty string "
                 "describing the unseen cases and/or code review you ran]"
             )
+        assert isinstance(holdout_evidence, str)
         name = inp.get("name")
         if _blank(name):
             return _error("[register_tool error: 'name' must be a non-empty string]")
         assert isinstance(name, str)
-        if not store.has(name):
+        candidate = store.get(name)
+        if candidate is None:
             return _error(
                 f"[register_tool error: no candidate named {name!r} exists; "
                 "forge_tool must build it successfully first]"
             )
+        if registry.has(name):
+            return _error(
+                f"[register_tool error: a tool named {name!r} is already registered; "
+                "re-forge the candidate under a different name]"
+            )
 
-        return _error(_REGISTER_NOT_IMPLEMENTED)
+        try:
+            manifest = promote_candidate(
+                candidate,
+                holdout_evidence=holdout_evidence,
+                workspace_path=settings.workspace_path,
+                tools_path=settings.tools_path,
+            )
+        except PromotionError as exc:
+            return _error(f"[register_tool error: {exc}]")
+        registry.register(build_forged_tool(manifest, sandbox))
+        # Pop only now: every step succeeded, so the candidate is consumed. Any
+        # earlier failure leaves it in the store for a revised registration.
+        store.pop(name)
+        return ToolResult(
+            tool_use_id="",
+            content=(
+                f"[register_tool: {name!r} registered and persisted to the tool store; "
+                "it is callable from your next turn onward. Its output will be "
+                "treated as UNVERIFIED.]"
+            ),
+        )
 
     return RegisteredTool(
         name="register_tool",

@@ -1,9 +1,10 @@
 # Sandbox
 
 **Status: v0 implemented — Docker-contained `run_bash` with a pipefail shell,
-eager container start, and serialized execution via the `"sandbox"` serial
-group. Per-tool domain allowlists, no-network-default for generated code, and
-credential logging are future slices.**
+eager container start, serialized execution via the `"sandbox"` serial group,
+and a read-only `/tools` mount hosting the forged-tool store. Per-tool domain
+allowlists, no-network-default for generated code, and credential logging are
+future slices.**
 
 All generated code runs here — never on the host.
 
@@ -27,6 +28,16 @@ All generated code runs here — never on the host.
     is mounted read-write at `/workspace`, which is the working directory, so
     artifacts survive and are host-inspectable. **The repo is never mounted** —
     which also keeps `.env` out of the model's reach.
+  - The host **`./tools`** dir (config: `TOOLFORGE_SANDBOX_TOOLS_PATH`) is
+    mounted **read-only** at `/tools`: the forged-tool store
+    ([forge.md](forge.md)). The agent can read registered tools but only the
+    harness (via `register_tool`'s promotion) writes them. Directory bind
+    mounts propagate live, so a tool promoted mid-session is visible in the
+    running container immediately; `/reset`'s fresh `docker run` re-declares
+    the mount. Forged tools execute here as
+    `docker exec … python3 /tools/_runner.py <name> <b64-input>`, in the
+    `"sandbox"` serial group and under the same `command_timeout` and output
+    caps as `run_bash`.
   - **Timeout** per command (`TOOLFORGE_SANDBOX_COMMAND_TIMEOUT`, default 60s):
     on expiry the child is killed and an `is_error` timeout result is returned.
     (The docker-exec *client* is killed; an in-container process may linger until

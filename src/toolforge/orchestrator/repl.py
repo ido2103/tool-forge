@@ -21,7 +21,13 @@ from typing import Any
 from pydantic import ValidationError
 
 from toolforge.config import AnthropicSettings, OrchestratorSettings, SandboxSettings
-from toolforge.forge import CandidateStore, build_forge_tool, build_register_tool
+from toolforge.forge import (
+    CandidateStore,
+    build_forge_tool,
+    build_register_tool,
+    install_runner,
+    load_persisted_tools,
+)
 from toolforge.orchestrator.hooks import HookEvent, HookManager
 from toolforge.orchestrator.loop import Orchestrator
 from toolforge.orchestrator.prompts import load_system_prompt
@@ -83,7 +89,7 @@ def _build(
     anthropic: AnthropicSettings,
     orch_settings: OrchestratorSettings,
     sandbox_settings: SandboxSettings,
-) -> tuple[Orchestrator, BashSandbox, str]:
+) -> tuple[Orchestrator, BashSandbox, CandidateStore, str]:
     client = AnthropicClient(anthropic)
     sandbox = BashSandbox(sandbox_settings)
     atexit.register(sandbox.teardown)
@@ -92,7 +98,16 @@ def _build(
     registry.register(build_run_bash(sandbox))
     candidates = CandidateStore()
     registry.register(build_forge_tool(candidates, registry))
-    registry.register(build_register_tool(candidates, registry))
+    registry.register(build_register_tool(candidates, registry, sandbox, sandbox_settings))
+
+    # Reload the persisted toolbox: tools forged in earlier sessions come back
+    # as live UNVERIFIED tools. A corrupt tool dir is skipped, never fatal.
+    install_runner(sandbox_settings.tools_path)
+    loaded, warnings = load_persisted_tools(sandbox_settings.tools_path, sandbox, registry)
+    for warning in warnings:
+        print(_style(f"[tool store: {warning}]", "33"), file=sys.stderr)
+    if loaded:
+        print(_dim(f"(loaded {len(loaded)} forged tool(s): {', '.join(loaded)})"))
 
     hooks = HookManager()
     _install_tool_oneliners(hooks)
@@ -109,7 +124,7 @@ def _build(
         max_iterations=orch_settings.max_iterations,
         transcript=transcript,
     )
-    return orch, sandbox, system_prompt
+    return orch, sandbox, candidates, system_prompt
 
 
 async def _run_turn(
@@ -133,7 +148,7 @@ async def _amain(args: argparse.Namespace) -> None:
     anthropic = AnthropicSettings()
     orch_settings = OrchestratorSettings()
     sandbox_settings = SandboxSettings()
-    orch, sandbox, system_prompt = _build(anthropic, orch_settings, sandbox_settings)
+    orch, sandbox, candidates, system_prompt = _build(anthropic, orch_settings, sandbox_settings)
 
     try:
         await sandbox.start()
@@ -172,13 +187,16 @@ async def _amain(args: argparse.Namespace) -> None:
             continue
         if user_text == "/reset":
             history.clear()
+            # Unpromoted candidates die with the session state; registered
+            # tools survive (they live on disk and in the registry).
+            candidates.clear()
             sandbox.teardown()
             try:
                 await sandbox.start()
             except RuntimeError as exc:
                 # Keep the REPL alive — run() retries the start on next use.
                 print(_style(f"[sandbox restart failed: {exc}]", "31"), file=sys.stderr)
-            print(_dim("(history cleared, container recycled)"))
+            print(_dim("(history cleared, candidates dropped, container recycled)"))
             continue
         await _run_turn(orch, user_text, history, system_prompt)
 

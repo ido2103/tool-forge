@@ -31,6 +31,13 @@ orchestrator calls it at the top of each iteration, so when the forge registers 
 tool mid-task the model can call it on the very next turn. This is the mechanism behind
 "the harness grows the model's world between turns" without editing the model's payload.
 
+This is now exercised for real: forged tools enter the registry as
+`UNVERIFIED` / `"sandbox"`-grouped `RegisteredTool`s at two moments — mid-session when
+`register_tool` promotes a candidate, and at REPL boot when the forge's loader rescans
+the on-disk tool store ([forge.md](forge.md)). The registry itself stays a pure
+in-memory store: persistence and promotion live in `forge/`, which depends on the
+registry and not the other way around.
+
 ### Trust and the safety envelope
 
 `execute` wraps string tool output via `wrap_tool_result` before it re-enters context:
