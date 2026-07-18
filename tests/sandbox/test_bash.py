@@ -63,8 +63,8 @@ async def test_exec_argv_shape(sandbox_settings: SandboxSettings) -> None:
     await sb.run("echo hi")
     exec_argv = runner.calls[1]
     assert exec_argv[:3] == ["docker", "exec", sb.container_name]
-    assert exec_argv[3:5] == ["bash", "-lc"]
-    assert exec_argv[5] == "echo hi"
+    assert exec_argv[3:7] == ["bash", "-o", "pipefail", "-lc"]
+    assert exec_argv[7] == "echo hi"
 
 
 async def test_network_none_flag_present(sandbox_settings: SandboxSettings) -> None:

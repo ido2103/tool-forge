@@ -30,6 +30,12 @@ and set any needed env vars inline in the same command.
 - Python 3.12, pip, and standard build tools are available. `pip install <pkg>` \
 works when the sandbox has network access (the default); if the network is \
 disabled, installs and network calls will fail.
+- The image is minimal: `curl`, `wget`, and `git` are NOT installed. For HTTP \
+requests, use python3 with urllib.request, or `pip install httpx`.
+- The exit code is reported automatically as `[exit code: N]` after the output. \
+Do not append `echo $?` or similar exit markers: a trailing `; echo ...` makes \
+the shell report echo's exit code (0) and hides the real failure. Commands run \
+with pipefail, so a failure anywhere in a pipeline is reported.
 - Output is capped; very large output is truncated head+tail. Filter with \
 grep/head/tail to see what you need.
 - Long commands are killed after a timeout (default from config; override with \

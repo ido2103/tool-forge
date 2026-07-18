@@ -1,8 +1,8 @@
 # Sandbox
 
-**Status: v0 implemented — Docker-contained `run_bash`. Per-tool domain
-allowlists, no-network-default for generated code, and credential logging are
-future slices.**
+**Status: v0 implemented — Docker-contained `run_bash` with a pipefail shell.
+Per-tool domain allowlists, no-network-default for generated code, and
+credential logging are future slices.**
 
 All generated code runs here — never on the host.
 
@@ -12,9 +12,11 @@ All generated code runs here — never on the host.
   - **Image** `python:3.12-slim` (config: `TOOLFORGE_SANDBOX_IMAGE`), started
     **lazily** on the first command via `docker run -d … sleep infinity`, and
     **persistent for the sandbox object's lifetime** (the REPL process).
-  - Each command runs `docker exec <name> bash -lc <command>` — a **fresh shell
-    per call**, so `cd`/env do not persist. The tool description tells the model
-    to use absolute paths.
+  - Each command runs `docker exec <name> bash -o pipefail -lc <command>` — a
+    **fresh shell per call**, so `cd`/env do not persist. The tool description
+    tells the model to use absolute paths. `pipefail` makes a failure anywhere
+    in a pipeline reach the exit code (without it, `curl … | head` reports
+    `head`'s `0` and a dead `curl` renders as success).
   - The host **`./workspace`** dir (config: `TOOLFORGE_SANDBOX_WORKSPACE_PATH`)
     is mounted read-write at `/workspace`, which is the working directory, so
     artifacts survive and are host-inspectable. **The repo is never mounted** —
@@ -30,6 +32,11 @@ All generated code runs here — never on the host.
 - **`run_bash`** (`run_bash.py`) — `build_run_bash(sandbox)` returns the seed
   tool. It validates `command`/`timeout`, runs the command, and formats
   `output + [exit code: N]`, marking a nonzero exit or a timeout as `is_error`.
+  Known limit: the shell reports the **last** command's exit code, so a
+  `;`-separated suffix (e.g. a trailing `; echo EXIT:$?`) masks an earlier
+  failure and renders as `✓`. Pipelines are covered mechanically by `pipefail`;
+  the `;`-list case is mitigated in the tool description, which states the exit
+  code is auto-reported and instructs the model not to append exit markers.
 
 ### Trust follows the network posture
 
