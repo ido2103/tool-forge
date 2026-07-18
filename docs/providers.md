@@ -54,8 +54,10 @@ Streams via the official `anthropic` SDK. Configured by
   workaround pre-delivery-only). Exceptions re-raise after exhaustion, then
   `send()` translates them into the neutral **error taxonomy** (below) so the
   orchestrator loop never imports the SDK exception types.
-- **Prompt caching** — top-level `cache_control` on every request
-  (`ephemeral`, or 1-hour TTL via `TOOLFORGE_ANTHROPIC_CACHE_TTL=1h`).
+- **Prompt caching** — top-level `cache_control` on every request; always
+  `type: "ephemeral"` (the only cache type), with the TTL configurable via
+  `TOOLFORGE_ANTHROPIC_CACHE_TTL` (`5m` default, or `1h` — note 1h cache
+  writes bill at 2× vs 1.25× for 5m).
 - **Thinking** — `TOOLFORGE_ANTHROPIC_EXTENDED_THINKING=adaptive` (default)
   sends `{"type": "adaptive", "display": "summarized"}`; set `off` for models
   that reject adaptive thinking.

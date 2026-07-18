@@ -16,7 +16,7 @@ def test_anthropic_defaults(clean_provider_env: None) -> None:
     assert s.auth_mode == "api_key"
     assert s.model == "claude-opus-4-8"
     assert s.base_url is None
-    assert s.cache_ttl == "ephemeral"
+    assert s.cache_ttl == "5m"
     assert s.extended_thinking == "adaptive"
     assert s.oauth_credentials_path.is_absolute()  # "~" expanded
 

@@ -33,7 +33,7 @@ class AnthropicSettings(BaseSettings):
     oauth_credentials_path: Path = Path("~/.config/toolforge/anthropic_oauth.json")
     model: str = "claude-opus-4-8"
     base_url: str | None = None
-    cache_ttl: Literal["ephemeral", "1h"] = "ephemeral"
+    cache_ttl: Literal["5m", "1h"] = "5m"
     extended_thinking: Literal["adaptive", "off"] = "adaptive"
 
     @field_validator("oauth_credentials_path")
