@@ -73,3 +73,72 @@ class WorkerSettings(BaseSettings):
     @property
     def base_url(self) -> str:
         return f"http://{self.host}:{self.port}/v1"
+
+
+class OrchestratorSettings(BaseSettings):
+    """Agent-loop knobs: turn/token budget, prompt override, transcript sink."""
+
+    model_config = SettingsConfigDict(
+        env_prefix="TOOLFORGE_ORCHESTRATOR_",
+        env_file=".env",
+        extra="ignore",
+        populate_by_name=True,
+    )
+
+    max_tokens_per_turn: int = 32_000
+    max_iterations: int = 30
+    # None → the loop loads the bundled default prompt (orchestrator/prompts/system.md).
+    system_prompt_path: Path | None = None
+    runs_dir: Path = Path("runs")
+
+    @field_validator("max_tokens_per_turn", "max_iterations")
+    @classmethod
+    def _positive(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("must be > 0")
+        return v
+
+    @field_validator("system_prompt_path", "runs_dir")
+    @classmethod
+    def _expand(cls, v: Path | None) -> Path | None:
+        return v.expanduser() if v is not None else None
+
+
+class SandboxSettings(BaseSettings):
+    """Docker-contained execution for the run_bash seed tool.
+
+    ``network="on"`` keeps the default bridge network so pip/curl work in demos;
+    ``"none"`` matches the spec's no-network-by-default posture for generated code.
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="TOOLFORGE_SANDBOX_",
+        env_file=".env",
+        extra="ignore",
+        populate_by_name=True,
+    )
+
+    image: str = "python:3.12-slim"
+    network: Literal["on", "none"] = "on"
+    workspace_path: Path = Path("./workspace")
+    command_timeout: int = 60
+    output_cap: int = 100_000
+
+    @field_validator("command_timeout")
+    @classmethod
+    def _timeout_range(cls, v: int) -> int:
+        if not 1 <= v <= 600:
+            raise ValueError("command_timeout must be between 1 and 600 seconds")
+        return v
+
+    @field_validator("output_cap")
+    @classmethod
+    def _cap_positive(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("output_cap must be > 0")
+        return v
+
+    @field_validator("workspace_path")
+    @classmethod
+    def _absolute(cls, v: Path) -> Path:
+        return v.expanduser().resolve()

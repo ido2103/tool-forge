@@ -31,13 +31,17 @@ from toolforge.providers._anthropic_sanitize import (
 from toolforge.providers.base import (
     AuthMode,
     MessageEnd,
+    PermanentProviderError,
+    ProviderError,
     ProviderEvent,
     TextDelta,
     ThinkingDelta,
     ToolUseDelta,
     ToolUseEnd,
     ToolUseStart,
+    TransientProviderError,
     drain_send,
+    is_transient_status,
 )
 from toolforge.providers.messages import (
     ContentBlock,
@@ -63,6 +67,25 @@ logger = logging.getLogger(__name__)
 _RETRYABLE_STATUS = {429, 500, 502, 503, 529}
 _MAX_STREAM_RETRIES = 5
 _BASE_DELAY = 2.0
+
+
+def _to_provider_error(exc: Exception) -> ProviderError:
+    """Translate an escaped anthropic/httpx exception into the neutral taxonomy.
+
+    Connection drops and read timeouts are always transient. Status errors are
+    transient only for retryable codes (or a body ``error.type == "api_error"``,
+    which is how mid-stream SSE failures surface as an HTTP 200).
+    """
+    if isinstance(exc, anthropic.APIStatusError):
+        status = exc.status_code
+        body = getattr(exc, "body", None)
+        err_type = body.get("error", {}).get("type") if isinstance(body, dict) else None
+        if is_transient_status(status, err_type):
+            return TransientProviderError(str(exc))
+        return PermanentProviderError(str(exc))
+    # APIConnectionError / httpx.TimeoutException: no HTTP status, always transient.
+    return TransientProviderError(str(exc) or type(exc).__name__)
+
 
 # Masquerade constants for OAuth mode — matches Hermes' _COMMON_BETAS + _OAUTH_ONLY_BETAS.
 # Without these Anthropic's OAuth routing intermittently 500s.
@@ -568,18 +591,28 @@ class AnthropicClient:
         on_thinking_delta: Callable[[str], Awaitable[None]] | None = None,
         on_text_delta: Callable[[str], Awaitable[None]] | None = None,
     ) -> Message:
-        return await drain_send(
-            self.stream(
-                messages=messages,
-                system=system,
-                model=model,
-                tools=tools,
-                max_tokens=max_tokens,
-                cancel_event=cancel_event,
-                turn_id=turn_id,
-                component=component,
-                extra=extra,
-            ),
-            on_thinking_delta=on_thinking_delta,
-            on_text_delta=on_text_delta,
-        )
+        # Translate escaped SDK exceptions into the neutral provider taxonomy so
+        # the orchestrator loop stays SDK-agnostic. asyncio.CancelledError is a
+        # BaseException and is NOT caught here — cancellation propagates untouched.
+        try:
+            return await drain_send(
+                self.stream(
+                    messages=messages,
+                    system=system,
+                    model=model,
+                    tools=tools,
+                    max_tokens=max_tokens,
+                    cancel_event=cancel_event,
+                    turn_id=turn_id,
+                    component=component,
+                    extra=extra,
+                ),
+                on_thinking_delta=on_thinking_delta,
+                on_text_delta=on_text_delta,
+            )
+        except (
+            anthropic.APIStatusError,
+            anthropic.APIConnectionError,
+            httpx.TimeoutException,
+        ) as exc:
+            raise _to_provider_error(exc) from exc

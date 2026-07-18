@@ -32,13 +32,17 @@ from toolforge.config import WorkerSettings
 from toolforge.providers.base import (
     AuthMode,
     MessageEnd,
+    PermanentProviderError,
+    ProviderError,
     ProviderEvent,
     TextDelta,
     ThinkingDelta,
     ToolUseDelta,
     ToolUseEnd,
     ToolUseStart,
+    TransientProviderError,
     drain_send,
+    is_transient_status,
 )
 from toolforge.providers.messages import (
     ContentBlock,
@@ -57,6 +61,21 @@ from toolforge.providers.usage import UsageEvent, UsageHook, log_usage
 logger = logging.getLogger(__name__)
 
 _RETRYABLE_STATUS = {429, 500, 502, 503, 529}
+
+
+def _to_provider_error(exc: Exception) -> ProviderError:
+    """Translate an escaped openai/httpx exception into the neutral taxonomy."""
+    if isinstance(exc, openai.APIStatusError):
+        status = exc.status_code
+        body = getattr(exc, "body", None)
+        err_type = body.get("error", {}).get("type") if isinstance(body, dict) else None
+        if is_transient_status(status, err_type):
+            return TransientProviderError(str(exc))
+        return PermanentProviderError(str(exc))
+    # APIConnectionError / httpx.TimeoutException: no HTTP status, always transient.
+    return TransientProviderError(str(exc) or type(exc).__name__)
+
+
 _MAX_STREAM_RETRIES = 5
 _BASE_DELAY = 2.0
 
@@ -479,18 +498,27 @@ class OpenAICompatClient:
         on_thinking_delta: Callable[[str], Awaitable[None]] | None = None,
         on_text_delta: Callable[[str], Awaitable[None]] | None = None,
     ) -> Message:
-        return await drain_send(
-            self.stream(
-                messages=messages,
-                system=system,
-                model=model,
-                tools=tools,
-                max_tokens=max_tokens,
-                cancel_event=cancel_event,
-                turn_id=turn_id,
-                component=component,
-                extra=extra,
-            ),
-            on_thinking_delta=on_thinking_delta,
-            on_text_delta=on_text_delta,
-        )
+        # Translate escaped SDK exceptions into the neutral provider taxonomy.
+        # asyncio.CancelledError (a BaseException) is not caught here.
+        try:
+            return await drain_send(
+                self.stream(
+                    messages=messages,
+                    system=system,
+                    model=model,
+                    tools=tools,
+                    max_tokens=max_tokens,
+                    cancel_event=cancel_event,
+                    turn_id=turn_id,
+                    component=component,
+                    extra=extra,
+                ),
+                on_thinking_delta=on_thinking_delta,
+                on_text_delta=on_text_delta,
+            )
+        except (
+            openai.APIStatusError,
+            openai.APIConnectionError,
+            httpx.TimeoutException,
+        ) as exc:
+            raise _to_provider_error(exc) from exc

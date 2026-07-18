@@ -19,7 +19,12 @@ import httpx
 import pytest
 from pydantic import SecretStr
 
-from toolforge.config import AnthropicSettings, WorkerSettings
+from toolforge.config import (
+    AnthropicSettings,
+    OrchestratorSettings,
+    SandboxSettings,
+    WorkerSettings,
+)
 from toolforge.providers import (
     AnthropicClient,
     Message,
@@ -96,6 +101,29 @@ def worker_settings() -> WorkerSettings:
         port=9999,
         model="test-model",
         api_key=SecretStr("EMPTY"),
+    )
+
+
+@pytest.fixture
+def orchestrator_settings(tmp_path: Path) -> OrchestratorSettings:
+    return OrchestratorSettings(
+        _env_file=None,
+        max_tokens_per_turn=1024,
+        max_iterations=5,
+        system_prompt_path=None,
+        runs_dir=tmp_path / "runs",
+    )
+
+
+@pytest.fixture
+def sandbox_settings(tmp_path: Path) -> SandboxSettings:
+    return SandboxSettings(
+        _env_file=None,
+        image="python:3.12-slim",
+        network="none",
+        workspace_path=tmp_path / "workspace",
+        command_timeout=30,
+        output_cap=10_000,
     )
 
 

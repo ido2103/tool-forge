@@ -51,10 +51,9 @@ Streams via the official `anthropic` SDK. Configured by
   from scratch, so retrying after deltas already reached
   `on_text_delta`/`on_thinking_delta` would duplicate live output. Mid-stream
   failures therefore surface to the caller (this also makes the #1265
-  workaround pre-delivery-only). Exceptions re-raise after exhaustion — the
-  agent loop can catch `anthropic.APIStatusError` / `APIConnectionError` /
-  `httpx.TimeoutException` as Zeemon's loop does, and owns turn-level
-  recovery.
+  workaround pre-delivery-only). Exceptions re-raise after exhaustion, then
+  `send()` translates them into the neutral **error taxonomy** (below) so the
+  orchestrator loop never imports the SDK exception types.
 - **Prompt caching** — top-level `cache_control` on every request
   (`ephemeral`, or 1-hour TTL via `TOOLFORGE_ANTHROPIC_CACHE_TTL=1h`).
 - **Thinking** — `TOOLFORGE_ANTHROPIC_EXTENDED_THINKING=adaptive` (default)
@@ -91,6 +90,26 @@ during warm-up), with the same rule: no retry once any event was delivered —
 mid-stream failures surface to the caller. The worker sends `max_tokens`
 (accepted by vLLM/llama.cpp; OpenAI proper deprecates it, but OpenAI proper is
 not a target).
+
+## Error taxonomy (`base.py`)
+
+`stream()` runs an SDK-typed retry ladder internally, but what escapes `send()`
+is a provider-neutral pair so the orchestrator loop stays adapter-agnostic:
+
+- **`TransientProviderError`** — retryable: HTTP 429/500/502/503/529, a
+  connection drop, a raw read/connect timeout, or an HTTP-200 SSE body whose
+  `error.type == "api_error"` (a mid-stream failure masquerading as success).
+- **`PermanentProviderError`** — non-retryable: any other 4xx (malformed
+  request, auth). Fail fast.
+
+Both subclass `ProviderError`. The classifier `is_transient_status(status,
+err_type)` encodes the retryable-status set once; each adapter's
+`_to_provider_error` calls it and wraps at the `send()` boundary via
+`except (APIStatusError, APIConnectionError, httpx.TimeoutException) → raise
+_to_provider_error(...)`. `asyncio.CancelledError` is a `BaseException` and is
+deliberately **not** caught — cooperative cancellation propagates untranslated.
+The loop retries once on `TransientProviderError` (after a long pause) and lets
+`PermanentProviderError` propagate; see [orchestrator.md](orchestrator.md).
 
 ## Usage hook (`usage.py`)
 
