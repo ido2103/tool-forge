@@ -138,9 +138,12 @@ worker slice will implement against.
   imports only, must `from tool import run`) → `pytest --collect-only` in the
   sandbox (syntax + at least `min_tests` tests) → a `pytest -v` run against a
   stub `tool.py` whose `run()` raises `NotImplementedError`. The suite is
-  accepted only when that run is *all-red*: a test that passes against the stub
-  asserts nothing about real behavior (vacuous) and is rejected by name. On
-  success the stub is deleted so it can never be mistaken for a built artifact.
+  accepted only when that run is *all-red through run() itself*: a test that
+  passes against the stub asserts nothing about real behavior (vacuous), and a
+  test that ERRORs before reaching run() (broken fixture, test-internal bug)
+  could never be satisfied by any implementation — both are rejected by name.
+  On success the stub is deleted so it can never be mistaken for a built
+  artifact.
 - **Retries are fix-in-context**: each rejection appends targeted feedback to
   the same conversation (the failing output, the vacuous test names) under a
   config-driven attempt budget — bounded in code, not prompt.

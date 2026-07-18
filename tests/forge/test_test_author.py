@@ -22,7 +22,7 @@ from toolforge.forge.test_author import (
     parse_stub_run,
     screen_test_source,
 )
-from toolforge.providers import Message
+from toolforge.providers import Message, TransientProviderError
 from toolforge.sandbox import BashSandbox
 
 # ── scripted materials ───────────────────────────────────────────────────────
@@ -254,6 +254,39 @@ async def test_vacuous_pass_names_the_test(
     assert "assert nothing" in feedback
 
 
+async def test_errored_test_rejected_by_name(
+    sandbox_settings: SandboxSettings, author_settings: TestAuthorSettings, spec: ToolSpec
+) -> None:
+    stub_one_error = (
+        1,
+        b"test_tool.py::test_simple ERROR\n"
+        b"test_tool.py::test_empty FAILED\n"
+        b"4 failed, 1 error in 0.05s\n",
+    )
+    author, client, _ = make_author(
+        [good_reply(), good_reply()],
+        [INSTALL_OK, COLLECT_OK, stub_one_error, COLLECT_OK, STUB_RED],
+        sandbox_settings,
+        author_settings,
+    )
+    result = await author.author_tests(spec)
+    assert result.attempts == 2
+    feedback = client.calls[1]["messages"][-1].text
+    assert "test_tool.py::test_simple" in feedback
+    assert "ERRORED" in feedback
+
+
+async def test_provider_error_becomes_author_error(
+    sandbox_settings: SandboxSettings, author_settings: TestAuthorSettings, spec: ToolSpec
+) -> None:
+    author, _, _ = make_author(
+        [TransientProviderError("rate limited")], [INSTALL_OK], sandbox_settings, author_settings
+    )
+    with pytest.raises(TestAuthorError, match="provider error during authoring"):
+        await author.author_tests(spec)
+    assert not build_dir(sandbox_settings).exists()
+
+
 async def test_stub_run_internal_error_feeds_back(
     sandbox_settings: SandboxSettings, author_settings: TestAuthorSettings, spec: ToolSpec
 ) -> None:
@@ -333,6 +366,23 @@ def test_screen_test_source_problems() -> None:
     assert "urllib" in text
     assert "from tool import run" in text
     assert "def test_" in text
+
+
+def test_screen_catches_compound_and_aliased_imports() -> None:
+    source = (
+        "import contextlib, subprocess\nimport http.client as hc\nfrom socket import gaierror\n"
+    )
+    text = "; ".join(screen_test_source(source))
+    assert "subprocess" in text
+    assert "http" in text
+    assert "socket" in text
+    # A benign module sharing a banned prefix is not flagged.
+    assert (
+        screen_test_source(
+            "from tool import run\nimport httpx_like_helper\n\ndef test_a():\n    run()\n"
+        )
+        == []
+    )
 
 
 def test_parse_collect_count() -> None:

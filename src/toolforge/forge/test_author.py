@@ -34,15 +34,16 @@ from typing import ClassVar
 
 from toolforge.config import SandboxSettings, TestAuthorSettings
 from toolforge.forge.candidates import ToolSpec
-from toolforge.providers import Message, ProviderClient, TextBlock
+from toolforge.providers import Message, ProviderClient, ProviderError, TextBlock
 from toolforge.sandbox import BashSandbox, truncate_output
 
 _PYTHON_BLOCK_RE = re.compile(r"```python\s*\n(.*?)```", re.DOTALL)
 # Modules that break the offline/deterministic contract. `http` also covers
-# http.client; `subprocess` closes the shell-out escape hatch.
-_FORBIDDEN_IMPORT_RE = re.compile(
-    r"^\s*(?:import|from)\s+(socket|urllib|http|requests|subprocess)\b", re.MULTILINE
-)
+# http.client; `subprocess` closes the shell-out escape hatch. This screen is
+# what keeps authored tests offline: at forge time the sandbox network is ON
+# (pip needs it), so the container is not enforcing isolation here.
+_BANNED_MODULES = frozenset({"socket", "urllib", "http", "requests", "subprocess"})
+_IMPORT_LINE_RE = re.compile(r"^\s*(import|from)\s+(.+)$", re.MULTILINE)
 _COLLECT_COUNT_RE = re.compile(r"(\d+) tests? collected")
 _TEST_RESULT_RE = re.compile(r"^(\S+::\S+)\s+(PASSED|FAILED|ERROR)", re.MULTILINE)
 
@@ -138,11 +139,25 @@ def extract_python_block(text: str) -> str | None:
     return source
 
 
+def _banned_imports(source: str) -> list[str]:
+    """Banned root modules imported anywhere, including ``import a, b`` lists."""
+    found = []
+    for keyword, rest in _IMPORT_LINE_RE.findall(source):
+        # `from x import y` names one module; `import a, b as c` names several.
+        names = [rest] if keyword == "from" else rest.split(",")
+        for name in names:
+            parts = name.split()
+            root = parts[0].split(".")[0] if parts else ""
+            if root in _BANNED_MODULES:
+                found.append(root)
+    return found
+
+
 def screen_test_source(source: str) -> list[str]:
     """Static screen before anything runs; returns problems, empty when clean."""
     problems = [
-        f"forbidden import '{m.group(1)}' (tests must be offline and deterministic)"
-        for m in _FORBIDDEN_IMPORT_RE.finditer(source)
+        f"forbidden import '{module}' (tests must be offline and deterministic)"
+        for module in _banned_imports(source)
     ]
     if "from tool import run" not in source:
         problems.append("missing 'from tool import run' — tests must exercise the tool module")
@@ -249,13 +264,20 @@ class TestAuthor:
 
         for attempt in range(1, self._settings.max_attempts + 1):
             self._check_deadline(deadline, "model call")
-            reply = await self._client.send(
-                messages=transcript,
-                system=system,
-                model=self._model,
-                max_tokens=self._settings.max_tokens,
-                component="test_author",
-            )
+            try:
+                reply = await self._client.send(
+                    messages=transcript,
+                    system=system,
+                    model=self._model,
+                    max_tokens=self._settings.max_tokens,
+                    component="test_author",
+                )
+            except ProviderError as exc:
+                # The adapter already ran its internal retry ladder; convert so
+                # the caller sees the documented error type and cleanup runs.
+                raise TestAuthorError(
+                    f"provider error during authoring (attempt {attempt}): {exc}"
+                ) from exc
             transcript.append(reply)
 
             def feedback(text: str) -> None:
@@ -317,7 +339,7 @@ class TestAuthor:
                 )
                 continue
             outcome = parse_stub_run(stub_run.stdout)
-            if stub_run.exit_code != 1 or outcome.passed:
+            if stub_run.exit_code != 1 or outcome.passed or outcome.errors:
                 if outcome.passed:
                     names = ", ".join(outcome.passed)
                     feedback(
@@ -325,6 +347,14 @@ class TestAuthor:
                         f"NotImplementedError, so they assert nothing about real "
                         f"behavior: {names}. Rewrite each to call run() and assert on "
                         "spec'd behavior; re-emit the complete file."
+                    )
+                elif outcome.errors:
+                    names = ", ".join(outcome.errors)
+                    feedback(
+                        f"These tests ERRORED before exercising run() (a broken "
+                        f"fixture or a bug inside the test itself), so no "
+                        f"implementation could ever satisfy them: {names}. Fix them "
+                        "to fail through run()'s behavior; re-emit the complete file."
                     )
                 else:
                     feedback(
