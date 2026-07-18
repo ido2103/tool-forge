@@ -10,7 +10,6 @@ Marked ``live`` (needs Docker); run with:  uv run pytest -m live
 
 from __future__ import annotations
 
-import shutil
 from pathlib import Path
 
 import pytest
@@ -23,11 +22,12 @@ from toolforge.providers import Message
 from toolforge.registry import ToolContext, ToolRegistry
 from toolforge.sandbox import BashSandbox, build_run_bash
 
+from tests._docker import DOCKER_SKIP_REASON, docker_available
 from tests.orchestrator._harness import FakeProviderClient, assistant_text, assistant_tool_use
 
 pytestmark = [
     pytest.mark.live,
-    pytest.mark.skipif(shutil.which("docker") is None, reason="docker CLI not available"),
+    pytest.mark.skipif(not docker_available(), reason=DOCKER_SKIP_REASON),
 ]
 
 

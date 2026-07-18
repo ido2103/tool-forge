@@ -7,7 +7,6 @@ Skips automatically if the docker CLI is unavailable.
 
 from __future__ import annotations
 
-import shutil
 from pathlib import Path
 
 import pytest
@@ -15,9 +14,11 @@ import pytest
 from toolforge.config import SandboxSettings
 from toolforge.sandbox.bash import BashSandbox
 
+from tests._docker import DOCKER_SKIP_REASON, docker_available
+
 pytestmark = [
     pytest.mark.live,
-    pytest.mark.skipif(shutil.which("docker") is None, reason="docker CLI not available"),
+    pytest.mark.skipif(not docker_available(), reason=DOCKER_SKIP_REASON),
 ]
 
 
