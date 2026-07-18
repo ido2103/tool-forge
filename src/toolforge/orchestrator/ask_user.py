@@ -39,9 +39,16 @@ class AskUserRequest:
     options: tuple[AskOption, ...]
 
 
+class AskUserUnavailableError(RuntimeError):
+    """Raised by a callback when no user can actually be reached (e.g. stdin
+    closed mid-session). The handler turns it into an ``is_error`` result so
+    the model sees "asking failed" — never a fabricated answer."""
+
+
 # The callback renders the request however the host likes (the REPL prints
 # numbered options and reads stdin) and returns the user's answer: either an
-# option's label verbatim or free-form text.
+# option's label verbatim or free-form text. If the user cannot be reached it
+# raises AskUserUnavailableError instead of synthesizing an answer.
 AskUserCallback = Callable[[AskUserRequest], Awaitable[str]]
 
 _DESCRIPTION = """\
@@ -172,7 +179,13 @@ def build_ask_user(ask: AskUserCallback) -> RegisteredTool:
             context=inp["context"].strip(),
             options=options,
         )
-        answer = (await ask(request)).strip()
+        try:
+            answer = (await ask(request)).strip()
+        except AskUserUnavailableError as exc:
+            return _error(
+                f"[ask_user error: could not reach the user ({exc}) — no answer was "
+                "given; decide with your best judgment and say so in your final reply]"
+            )
         labels = {o.label for o in request.options}
         if answer in labels:
             content = f'User chose: "{answer}"'

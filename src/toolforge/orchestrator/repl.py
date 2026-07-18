@@ -28,7 +28,11 @@ from toolforge.forge import (
     install_runner,
     load_persisted_tools,
 )
-from toolforge.orchestrator.ask_user import AskUserRequest, build_ask_user
+from toolforge.orchestrator.ask_user import (
+    AskUserRequest,
+    AskUserUnavailableError,
+    build_ask_user,
+)
 from toolforge.orchestrator.hooks import HookEvent, HookManager
 from toolforge.orchestrator.loop import Orchestrator
 from toolforge.orchestrator.prompts import load_system_prompt
@@ -99,7 +103,8 @@ async def _ask_via_stdin(request: AskUserRequest) -> str:
             sys.stdout.flush()
             raise
         except EOFError:
-            return "[no answer: stdin closed]"
+            # Never synthesize an answer the user didn't give — surface a failure.
+            raise AskUserUnavailableError("stdin closed — no interactive user attached") from None
         if not raw:
             continue
         if raw.isdigit() and 1 <= int(raw) <= len(request.options):

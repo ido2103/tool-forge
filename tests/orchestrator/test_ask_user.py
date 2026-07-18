@@ -12,6 +12,7 @@ from tests.orchestrator._harness import FakeProviderClient, assistant_text, assi
 from toolforge.orchestrator.ask_user import (
     USER_SERIAL_GROUP,
     AskUserRequest,
+    AskUserUnavailableError,
     build_ask_user,
 )
 from toolforge.orchestrator.loop import Orchestrator
@@ -81,6 +82,20 @@ def test_registered_shape() -> None:
     # Generation order is reasoning order: context must precede options.
     keys = list(tool.input_schema["properties"])
     assert keys.index("context") < keys.index("options")
+
+
+async def test_unreachable_user_is_error_never_an_answer() -> None:
+    async def no_user(request: AskUserRequest) -> str:
+        raise AskUserUnavailableError("stdin closed — no interactive user attached")
+
+    tool = build_ask_user(no_user)
+    result = await tool.handler(_valid_input(), ToolContext())
+    assert result.is_error
+    assert isinstance(result.content, str)
+    assert "could not reach the user" in result.content
+    assert "stdin closed" in result.content
+    # A failure must never masquerade as something the user said.
+    assert "User answered" not in result.content
 
 
 # ── validation: actionable errors, callback never invoked ────────────────────

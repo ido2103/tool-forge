@@ -110,7 +110,10 @@ invoked for it.
   that want to exercise ask-behavior inject a scripted callback.
 - **REPL wiring** (`repl.py::_ask_via_stdin`): renders the question, dimmed
   context, and numbered options (recommended flagged), then reads stdin; a
-  digit picks, anything else is free-form. Known v1 warts: a Ctrl-C stop while
+  digit picks, anything else is free-form. If stdin is closed (EOF — e.g. a
+  non-interactive invocation) the callback raises `AskUserUnavailableError`,
+  which the handler converts to an `is_error` result — a failure to reach the
+  user is never synthesized into an answer. Known v1 warts: a Ctrl-C stop while
   waiting aborts the question (`[ABORTED]` result) but the orphaned `input()`
   thread may swallow the next typed line, and concurrently running sandbox
   tools can print one-liners mid-prompt. Accepted for a single-user REPL.
