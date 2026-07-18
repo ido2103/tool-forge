@@ -16,7 +16,7 @@ def test_anthropic_defaults(clean_provider_env: None) -> None:
     assert s.auth_mode == "api_key"
     assert s.model == "claude-opus-4-8"
     assert s.base_url is None
-    assert s.cache_ttl == "ephemeral"
+    assert s.cache_ttl == "5m"
     assert s.extended_thinking == "adaptive"
     assert s.oauth_credentials_path.is_absolute()  # "~" expanded
 
@@ -63,6 +63,16 @@ def test_anthropic_api_key_prefixed_env_alias(
 def test_api_key_required_in_api_key_mode(clean_provider_env: None) -> None:
     with pytest.raises(ValidationError, match="ANTHROPIC_API_KEY is required"):
         AnthropicSettings()
+
+
+def test_cache_ttl_rejects_old_ephemeral_value(
+    clean_provider_env: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # "ephemeral" is the cache_control *type*, never a TTL — old envs that
+    # still set it must fail loudly instead of silently caching wrong.
+    monkeypatch.setenv("TOOLFORGE_ANTHROPIC_CACHE_TTL", "ephemeral")
+    with pytest.raises(ValidationError, match="cache_ttl"):
+        AnthropicSettings(api_key=SecretStr("k"))
 
 
 def test_oauth_mode_requires_existing_creds_file(clean_provider_env: None, tmp_path: Path) -> None:

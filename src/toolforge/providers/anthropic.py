@@ -455,9 +455,8 @@ class AnthropicClient:
 
         anth_messages = canonical_to_anthropic(messages)
 
-        cache_control: dict[str, Any] = {"type": "ephemeral"}
-        if self.settings.cache_ttl == "1h":
-            cache_control["ttl"] = "1h"
+        # "ephemeral" is the only cache type; the TTL ("5m"/"1h") is the knob.
+        cache_control: dict[str, Any] = {"type": "ephemeral", "ttl": self.settings.cache_ttl}
 
         if self.auth_mode is AuthMode.OAUTH:
             system_blocks: list[dict[str, Any]] = [

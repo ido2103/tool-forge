@@ -58,7 +58,7 @@ def anthropic_settings(tmp_path: Path) -> AnthropicSettings:
         oauth_credentials_path=tmp_path / "unused.json",
         model="claude-test",
         base_url=None,
-        cache_ttl="ephemeral",
+        cache_ttl="5m",
         extended_thinking="adaptive",
     )
 
@@ -88,7 +88,7 @@ def anthropic_settings_oauth(oauth_creds_file: Path) -> AnthropicSettings:
         oauth_credentials_path=oauth_creds_file,
         model="claude-test",
         base_url=None,
-        cache_ttl="ephemeral",
+        cache_ttl="5m",
         extended_thinking="off",
     )
 

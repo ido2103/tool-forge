@@ -89,7 +89,7 @@ async def test_stream_text_happy_path(
     assert req.headers["x-api-key"] == "test-key"
     body = json.loads(req.content)
     assert body["system"] == [{"type": "text", "text": "sys"}]
-    assert body["cache_control"] == {"type": "ephemeral"}
+    assert body["cache_control"] == {"type": "ephemeral", "ttl": "5m"}
     assert body["thinking"] == {"type": "adaptive", "display": "summarized"}
     assert body["stream"] is True
     assert "tools" not in body

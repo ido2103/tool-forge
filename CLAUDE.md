@@ -30,6 +30,12 @@ pytest configuration lives in `pytest.ini` (live tests are deselected by default
   run `uv run pytest` manually and pass before every commit.
 - **PRs**: when a branch is ready, proactively suggest opening a PR, but always ask
   the user for permission before actually creating one.
+- **After opening a PR**: without being asked, watch the "Claude Review" workflow
+  until it finishes (`gh pr checks <n>` / `gh run list --branch <branch>`), then
+  fetch the summary and inline comments (`gh pr view <n> --json comments,reviews`,
+  `gh api repos/<owner>/<repo>/pulls/<n>/comments`) and walk through the findings
+  with the user — verdict first, then each finding with a recommendation on
+  whether to apply it. Don't apply fixes until the user agrees.
 
 ## Contracts
 
