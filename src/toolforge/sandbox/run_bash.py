@@ -57,6 +57,9 @@ _INPUT_SCHEMA: dict[str, Any] = {
 }
 
 
+_SIGPIPE_EXIT = 141
+
+
 def build_run_bash(sandbox: BashSandbox) -> RegisteredTool:
     """Build the ``run_bash`` RegisteredTool bound to *sandbox*.
 
@@ -92,6 +95,16 @@ def build_run_bash(sandbox: BashSandbox) -> RegisteredTool:
         body = result.stdout
         if body and not body.endswith("\n"):
             body += "\n"
+        # 141 = 128+SIGPIPE. Under pipefail, a producer killed because an
+        # early-exiting consumer closed the pipe (`seq 1e6 | head -1`) reports
+        # 141 even though the pipeline delivered exactly what was asked — and
+        # the description above steers the model toward `| head`/`| tail`.
+        # Treat it as success; the annotation keeps 141 from reading as failure.
+        if result.exit_code == _SIGPIPE_EXIT:
+            content = (
+                f"{body}[exit code: 141 (SIGPIPE: pipe consumer exited early; treated as success)]"
+            )
+            return ToolResult(tool_use_id="", content=content, is_error=False)
         content = f"{body}[exit code: {result.exit_code}]"
         return ToolResult(tool_use_id="", content=content, is_error=result.exit_code != 0)
 

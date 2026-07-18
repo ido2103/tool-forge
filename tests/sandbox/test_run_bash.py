@@ -105,6 +105,16 @@ async def test_nonzero_exit_is_error(sandbox_settings: SandboxSettings) -> None:
     assert "[exit code: 2]" in str(result.content)
 
 
+async def test_sigpipe_exit_is_not_error(sandbox_settings: SandboxSettings) -> None:
+    # Under pipefail, `seq 1e6 | head -1` exits 141 (SIGPIPE) after delivering
+    # exactly what was asked; that must not render as a failure.
+    tool = _tool_with([(0, b"started"), (141, b"1\n")], sandbox_settings)
+    result = await tool.handler({"command": "seq 1 1000000 | head -1"}, ToolContext())
+    assert not result.is_error
+    assert "SIGPIPE" in str(result.content)
+    assert "[exit code: 141" in str(result.content)
+
+
 async def test_timeout_is_error(sandbox_settings: SandboxSettings) -> None:
     tool = _tool_with([(0, b"started"), TimeoutError()], sandbox_settings)
     result = await tool.handler({"command": "sleep 999", "timeout": 3}, ToolContext())

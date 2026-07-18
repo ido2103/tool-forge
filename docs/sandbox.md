@@ -31,7 +31,11 @@ All generated code runs here — never on the host.
     best-effort, synchronous so it runs from the REPL's `atexit`.
 - **`run_bash`** (`run_bash.py`) — `build_run_bash(sandbox)` returns the seed
   tool. It validates `command`/`timeout`, runs the command, and formats
-  `output + [exit code: N]`, marking a nonzero exit or a timeout as `is_error`.
+  `output + [exit code: N]`, marking a nonzero exit or a timeout as `is_error` —
+  **except exit 141 (SIGPIPE)**, which under `pipefail` is what a producer
+  reports when an early-exiting consumer (`… | head`) closes the pipe after
+  getting exactly what it asked for; 141 is treated as success and annotated in
+  the result so the model doesn't read it as failure.
   Known limit: the shell reports the **last** command's exit code, so a
   `;`-separated suffix (e.g. a trailing `; echo EXIT:$?`) masks an earlier
   failure and renders as `✓`. Pipelines are covered mechanically by `pipefail`;
