@@ -15,6 +15,12 @@ lands.
 | Orchestrator | Frontier API model (Claude Sonnet/Opus) | All judgment: task execution, wall detection, spec & test authoring, skill authoring, satisfaction review |
 | Forge worker | Configurable backend — see below | All labor: implementing tools against failing tests until green |
 
+The forge's **test author** is a distinct role within the frontier tier: it writes the
+adversarial tests the worker must satisfy, and defaults to the orchestrator's model
+(override via `TOOLFORGE_TEST_AUTHOR_MODEL`; loop knobs under the same prefix). The
+cross-model invariant below is author-vs-worker — sharing the orchestrator's model is
+fine, sharing the worker's is not.
+
 The forge worker backend is chosen by configuration; both modes are first-class:
 
 - **api** (default): a cheaper API model (e.g. Claude Haiku). The system is fully
