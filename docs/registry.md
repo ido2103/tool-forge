@@ -40,6 +40,12 @@ List (multimodal) content passes through unwrapped. `execute` raises `KeyError` 
 unknown tool name; the loop converts that into an `is_error` result so a hallucinated
 name never aborts the run.
 
+`trust_for(name)` exposes a tool's trust level so the orchestrator can wrap output the
+tool never got to return — i.e. when the handler *raised*, so `execute` never reached
+its wrapping step. Unknown names fall back to `TRUSTED`, because the only content that
+can exist for an unregistered tool is a harness-generated error string with no external
+payload to quarantine.
+
 ## Behavior (from [spec](spec.md)) — not yet implemented
 
 - **Retrieval before forging**: the orchestrator queries the registry before the forge

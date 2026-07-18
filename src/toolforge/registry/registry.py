@@ -13,7 +13,7 @@ from __future__ import annotations
 from typing import Any
 
 from toolforge.registry.safety import wrap_tool_result
-from toolforge.registry.types import RegisteredTool, ToolContext, ToolResult
+from toolforge.registry.types import RegisteredTool, ToolContext, ToolResult, Trust
 
 
 class ToolRegistry:
@@ -40,6 +40,16 @@ class ToolRegistry:
 
     def has(self, name: str) -> bool:
         return name in self._tools
+
+    def trust_for(self, name: str) -> Trust:
+        """Trust level for *name*, for wrapping output the tool never got to return.
+
+        Unknown names fall back to ``TRUSTED`` because the only content that can
+        exist for an unregistered tool is a harness-generated error string — there
+        is no external payload to quarantine.
+        """
+        tool = self._tools.get(name)
+        return tool.trust if tool is not None else "TRUSTED"
 
     def get_schemas(self) -> list[dict[str, Any]]:
         """The Anthropic-shape tool defs for the model.

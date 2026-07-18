@@ -26,7 +26,15 @@ the loop mutates it in place and mirrors every message to a `Transcript`.
 - **Tool execution** (`_execute_tools`) runs the turn's tool calls concurrently
   (`asyncio.gather`), re-assembles results in original order, and turns a handler
   exception or unknown-tool `KeyError` into an `is_error` result — a bad tool never
-  aborts the run.
+  aborts the run. The model-facing error text is `repr(exc)` — **never a traceback**
+  (frames go to the log via `exc_info=True`, not the context window) — and it is:
+  - **capped** at `_ERROR_CONTENT_CAP` (4k chars) with a truncation note. Exception
+    messages are unbounded in practice (embedded subprocess output, validation dumps,
+    HTTP bodies); uncapped, one raising tool can cost tens of thousands of tokens.
+  - **wrapped in the safety envelope** using the failing tool's trust level. The
+    handler raised before `registry.execute` could wrap, so the loop applies it —
+    an `UNVERIFIED` (forged) tool's exception message can carry external text just
+    as its return value would.
 - **Cancellation**: `request_stop()` sets a per-run event; the loop checks it at each
   turn boundary and after each send, aborts in-flight tools (firing their
   cancel-handlers), synthesizes `[ABORTED]` tool results, and returns `"Stopping."`.

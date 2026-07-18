@@ -145,3 +145,13 @@ def test_get_schemas_fresh_list_reflects_live_add() -> None:
     assert len(first) == 1  # prior snapshot untouched
     second = reg.get_schemas()
     assert {s["name"] for s in second} == {"first", "second"}
+
+
+def test_trust_for_known_and_unknown() -> None:
+    reg = ToolRegistry()
+    reg.register(_echo_tool("trusted_tool", trust="TRUSTED"))
+    reg.register(_echo_tool("forged_tool", trust="UNVERIFIED"))
+    assert reg.trust_for("trusted_tool") == "TRUSTED"
+    assert reg.trust_for("forged_tool") == "UNVERIFIED"
+    # Unknown name: only harness-generated error text can exist for it.
+    assert reg.trust_for("never_registered") == "TRUSTED"

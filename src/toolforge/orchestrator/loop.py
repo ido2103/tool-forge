@@ -33,11 +33,16 @@ from toolforge.providers import (
     ToolResultBlock,
     TransientProviderError,
 )
-from toolforge.registry import ToolCall, ToolRegistry, ToolResult
+from toolforge.registry import ToolCall, ToolRegistry, ToolResult, wrap_tool_result
 
 logger = logging.getLogger(__name__)
 
 _BASE64_RE = re.compile(r'"[A-Za-z0-9+/=]{100,}"')
+
+# A raising tool yields repr(exc) to the model. Exception messages are unbounded
+# in practice (subprocess output, validation dumps, HTTP bodies get embedded in
+# them), so cap what reaches the context window. The full text is still logged.
+_ERROR_CONTENT_CAP = 4_000
 
 _ITERATION_LIMIT_NUDGE = (
     "[System: iteration limit reached] You have used all available tool-call "
@@ -63,6 +68,19 @@ def _sanitize_tool_input(inp: dict[str, Any], max_len: int = 200) -> str:
     s = json.dumps(inp, ensure_ascii=False)
     s = _BASE64_RE.sub('"<base64 data>"', s)
     return s[:max_len] + "…" if len(s) > max_len else s
+
+
+def _error_content(tool_name: str, exc: BaseException) -> str:
+    """Model-facing text for a tool that raised: ``repr(exc)``, capped.
+
+    Never a traceback — frames are for the local log, not the context window.
+    """
+    detail = repr(exc)
+    if len(detail) > _ERROR_CONTENT_CAP:
+        detail = (
+            f"{detail[:_ERROR_CONTENT_CAP]}… [error message truncated: {len(detail)} chars total]"
+        )
+    return f"[Tool '{tool_name}' failed: {detail}]"
 
 
 class Orchestrator:
@@ -211,9 +229,17 @@ class Orchestrator:
                     latency_ms=elapsed_ms,
                     component=self._component,
                 )
+                # The handler raised before registry.execute could wrap its
+                # output, so apply the envelope here — an UNVERIFIED tool's
+                # exception message can carry external text just as its return
+                # value would.
                 return ToolResult(
                     tool_use_id=tc.id,
-                    content=f"[Tool '{tc.name}' failed: {e!r}]",
+                    content=wrap_tool_result(
+                        tool=tc.name,
+                        content=_error_content(tc.name, e),
+                        trust=self._registry.trust_for(tc.name),
+                    ),
                     is_error=True,
                 )
 
