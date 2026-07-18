@@ -1,8 +1,9 @@
 # Orchestrator
 
 **Status: v0 loop implemented — ReAct send→tools→repeat with full stop_reason
-handling, serial-group tool execution, cancellation, and transcripts. The wall
-detector, spec/skill authoring, and satisfaction review are not yet built.**
+handling, serial-group tool execution, cancellation, and transcripts — plus the
+`ask_user` clarification tool (blocking mid-turn question, REPL-serviced). The
+wall detector, spec/skill authoring, and satisfaction review are not yet built.**
 
 The frontier-model brain (Claude Sonnet/Opus via API). Owns every judgment call in the
 system; the forge worker never decides, only implements.
@@ -71,9 +72,7 @@ Config comes from `OrchestratorSettings` (`max_iterations`, `max_tokens_per_turn
 - Author skills after successful multi-step tasks, and a companion usage skill for every
   newly forged tool before its first live use.
 
-## Planned: `ask_user` clarification tool (next slice, designed 2026-07-18)
-
-Not yet built — this section is the handoff design for a dedicated session.
+## `ask_user` clarification tool (`ask_user.py`)
 
 **Motivation.** In the first real REPL run ("I want to feed you audio files and
 have you transcribe them", local transcript `runs/20260718T184024884822Z.jsonl`,
@@ -83,7 +82,48 @@ API, model size (speed/accuracy), JSON output shape, and ~hundreds of MB of
 model cache written to the persistent workspace. Defensible defaults — but for a
 tool-forging agent, ambiguity at spec time becomes baked-in tool behavior
 forever. The wall detector's three verdicts (missing tool / misuse / impossible)
-have a fourth in practice: **underspecified — ask**.
+have a fourth in practice: **underspecified — ask** (the verdict itself lands
+when the detector is built; the tool it needs exists now).
+
+**Mechanism** — a *blocking mid-turn tool*. The model calls `ask_user` with a
+`question`, the `context` behind it (constraints/trade-offs, deliberately
+ordered before the options in the schema so the options follow from stated
+reasoning), and 2–4 `options` (`{label, description, recommended?}`, at most
+one recommended). The handler validates and awaits a host-injected
+`AskUserCallback`; the answer returns as the `tool_result` and the turn resumes
+in place — an auditable `tool_use`/`tool_result` pair in the transcript.
+Invalid input gets an actionable `is_error` message, and the callback is never
+invoked for it.
+
+- **Answer semantics**: the user picks an option (result: `User chose:
+  "<label>"`, label verbatim — semantic handles beat indices) or answers
+  free-form (`User answered: <text>`, authoritative). Empty input re-prompts —
+  no silent default, an accidental Enter must not make the decision this tool
+  exists to surface.
+- **Serial group `"user"`**: multiple questions in one batch run one at a time,
+  in emission order — they must not race for the single human input channel.
+- **TRUSTED**: the result is the user's own words; the user is the principal,
+  so no safety envelope applies.
+- **Headless rule**: hosts without a human (evals, automated runs) simply don't
+  call `build_ask_user` — an unregistered tool has no schema in the payload, so
+  the model can't call it and never learns that asking "fails". Eval harnesses
+  that want to exercise ask-behavior inject a scripted callback.
+- **REPL wiring** (`repl.py::_ask_via_stdin`): renders the question, dimmed
+  context, and numbered options (recommended flagged), then reads stdin; a
+  digit picks, anything else is free-form. If stdin is closed (EOF — e.g. a
+  non-interactive invocation) the callback raises `AskUserUnavailableError`,
+  which the handler converts to an `is_error` result — a failure to reach the
+  user is never synthesized into an answer. Known v1 warts: a Ctrl-C stop while
+  waiting aborts the question (`[ABORTED]` result) but the orphaned `input()`
+  thread may swallow the next typed line, and concurrently running sandbox
+  tools can print one-liners mid-prompt. Accepted for a single-user REPL.
+
+The system prompt (`prompts/system.md`, "Asking the user") carries the policy:
+mandatory asks for decisions baked into a forged tool's spec/tests,
+hard-to-reverse or externally visible actions, and materially branching intent;
+liberal asking welcome on genuine ambiguity below that threshold; guards —
+batch related decisions into one question, never ask what a tool/registry/docs
+lookup can answer.
 
 ## Design notes
 

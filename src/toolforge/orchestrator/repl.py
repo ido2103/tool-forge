@@ -28,6 +28,11 @@ from toolforge.forge import (
     install_runner,
     load_persisted_tools,
 )
+from toolforge.orchestrator.ask_user import (
+    AskUserRequest,
+    AskUserUnavailableError,
+    build_ask_user,
+)
 from toolforge.orchestrator.hooks import HookEvent, HookManager
 from toolforge.orchestrator.loop import Orchestrator
 from toolforge.orchestrator.prompts import load_system_prompt
@@ -60,7 +65,7 @@ def _install_tool_oneliners(hooks: HookManager) -> None:
         preview = ""
         inp = kw.get("input") or {}
         if isinstance(inp, dict):
-            cmd = inp.get("command")
+            cmd = inp.get("command") or inp.get("question")
             if isinstance(cmd, str):
                 preview = cmd if len(cmd) <= 80 else cmd[:77] + "…"
         sys.stdout.write(_cyan(f"\n→ {kw.get('tool_name')}: {preview}\n"))
@@ -73,6 +78,38 @@ def _install_tool_oneliners(hooks: HookManager) -> None:
 
     hooks.register(HookEvent.ON_TOOL_PRE_EXECUTE, pre)
     hooks.register(HookEvent.ON_TOOL_POST_EXECUTE, post)
+
+
+async def _ask_via_stdin(request: AskUserRequest) -> str:
+    """Service an ``ask_user`` call: render the question, read the answer.
+
+    A number picks that option (returned as its label, verbatim); anything else
+    is a free-form answer; empty input re-prompts — there is no silent default.
+    Cancellation (Ctrl-C stop) aborts the wait; the orphaned ``input`` thread
+    may swallow the next typed line — a known single-user-REPL wart.
+    """
+    lines = [f"\n{_cyan('?')} {request.question}", _dim(f"  {request.context}")]
+    for i, opt in enumerate(request.options, start=1):
+        mark = _cyan(" (recommended)") if opt.recommended else ""
+        lines.append(f"  {i}. {opt.label}{mark} — {_dim(opt.description)}")
+    lines.append(_dim("  (pick a number or type an answer)"))
+    sys.stdout.write("\n".join(lines) + "\n")
+    sys.stdout.flush()
+    while True:
+        try:
+            raw = (await asyncio.to_thread(input, "  answer » ")).strip()
+        except asyncio.CancelledError:
+            sys.stdout.write(_dim("\n(question aborted)\n"))
+            sys.stdout.flush()
+            raise
+        except EOFError:
+            # Never synthesize an answer the user didn't give — surface a failure.
+            raise AskUserUnavailableError("stdin closed — no interactive user attached") from None
+        if not raw:
+            continue
+        if raw.isdigit() and 1 <= int(raw) <= len(request.options):
+            return request.options[int(raw) - 1].label
+        return raw
 
 
 async def _on_thinking(text: str) -> None:
@@ -96,6 +133,9 @@ def _build(
 
     registry = ToolRegistry(ToolContext())
     registry.register(build_run_bash(sandbox))
+    # The REPL has a human on stdin, so ask_user is registered here; headless
+    # hosts (evals, automated runs) omit it and the model never sees the schema.
+    registry.register(build_ask_user(_ask_via_stdin))
     candidates = CandidateStore()
     registry.register(build_forge_tool(candidates, registry))
     registry.register(build_register_tool(candidates, registry, sandbox, sandbox_settings))

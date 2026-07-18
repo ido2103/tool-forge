@@ -82,7 +82,10 @@ Runtime configuration comes from `.env` via `src/toolforge/config.py`
   `stop_reason` state machine, concurrent tool execution (with per-`serial_group`
   FIFO chaining for tools that share state), graceful cancellation, a
   transient-retry, a wrap-up-on-cap, lifecycle hooks, and per-run JSONL transcripts. A
-  stdlib streaming **REPL** (`toolforge` console script) drives it. The wall detector,
+  stdlib streaming **REPL** (`toolforge` console script) drives it. The **`ask_user`**
+  tool gives the orchestrator a human-in-the-loop clarification channel: a blocking
+  mid-turn question serviced by a host-injected callback (the REPL wires stdin;
+  headless hosts simply don't register the tool). The wall detector,
   spec/skill authoring, and satisfaction review are still to come.
 - **registry** — v0 instance `ToolRegistry`: live add/replace (schemas re-read every
   iteration → tools grow mid-task) + the XML tool-result safety envelope. Spec/test
@@ -104,7 +107,8 @@ Runtime configuration comes from `.env` via `src/toolforge/config.py`
   [forge.md](forge.md).
 
 **How it wires together today:** the REPL builds an `AnthropicClient`, a `BashSandbox`
-+ `ToolRegistry` (with `run_bash`, `forge_tool`, and `register_tool` bound to a shared
++ `ToolRegistry` (with `run_bash`, `ask_user` bound to a stdin prompt callback, and
+`forge_tool` + `register_tool` bound to a shared
 `CandidateStore` and the live registry), installs the forged-tool runner and reloads
 every persisted tool from the `./tools` store (skipping corrupt entries with a
 warning), builds a `HookManager` and a `Transcript`, starts the sandbox container
