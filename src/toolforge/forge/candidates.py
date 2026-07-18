@@ -14,6 +14,35 @@ from dataclasses import dataclass, field
 from typing import Any
 
 
+@dataclass(frozen=True)
+class ToolSpec:
+    """The orchestrator-authored contract a tool is forged from.
+
+    Carries exactly what the build loop (test author, then worker) needs —
+    ``gap_analysis`` is deliberately absent: it justifies *whether* to forge,
+    not *what* to build, so it stays on :class:`Candidate` for provenance.
+    """
+
+    name: str
+    description: str
+    input_schema: dict[str, Any]
+    behavior: str
+    allowed_domains: tuple[str, ...] = ()
+    examples: tuple[dict[str, Any], ...] = ()
+
+    @classmethod
+    def from_validated_input(cls, inp: dict[str, Any]) -> ToolSpec:
+        """Build from a ``forge_tool`` input dict that already passed validation."""
+        return cls(
+            name=inp["name"],
+            description=inp["description"],
+            input_schema=inp["input_schema"],
+            behavior=inp["behavior"],
+            allowed_domains=tuple(inp.get("allowed_domains") or ()),
+            examples=tuple(inp.get("examples") or ()),
+        )
+
+
 @dataclass
 class Candidate:
     """A forged tool awaiting the orchestrator's holdout check and registration."""

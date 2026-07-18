@@ -95,9 +95,12 @@ Runtime configuration comes from `.env` via `src/toolforge/config.py`
 - **forge** — `register_tool` implemented: promotes a verified candidate into the
   persistent tool store (`./tools`, read-only in the container) and the live
   registry, executing via a harness-owned runner in the sandbox; the store is
-  rescanned at boot, so the toolbox survives restarts. `forge_tool` (spec →
-  candidate) still validates input and returns a guided not-implemented error; the
-  internal build loop (test author + worker) is the next slice. See
+  rescanned at boot, so the toolbox survives restarts. The **adversarial test
+  author** is implemented: a frontier-tier call that turns a spec into a
+  validated, all-red pytest suite in the workspace (collect + stub-run gates,
+  bounded fix-in-context retries, wall-clock budget). `forge_tool` (spec →
+  candidate) still validates input and returns a guided not-implemented error;
+  the forge worker loop that consumes the authored suite is the next slice. See
   [forge.md](forge.md).
 
 **How it wires together today:** the REPL builds an `AnthropicClient`, a `BashSandbox`
@@ -111,5 +114,5 @@ provider, and dispatches tool calls into the sandbox; `/reset` also drops unprom
 candidates. This is the spine the forge's build loop, wall detector, skills, and evals
 will hang off.
 
-**Skeleton only:** skills, evals; the forge's internal build loop. Update this section
-as subsystems land.
+**Skeleton only:** skills, evals; the forge's worker loop (the test author half is
+implemented). Update this section as subsystems land.
