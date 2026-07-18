@@ -3,8 +3,8 @@
 **Status: v0 implemented — Docker-contained `run_bash` with a pipefail shell,
 eager container start, serialized execution via the `"sandbox"` serial group,
 and a read-only `/tools` mount hosting the forged-tool store. Per-tool domain
-allowlists, no-network-default for generated code, and credential logging are
-future slices.**
+allowlists, no-network-default for generated code, credential logging, and
+taint-based trust (below) are future slices.**
 
 All generated code runs here — never on the host.
 
@@ -79,6 +79,30 @@ This keeps the code aligned with [registry.md](registry.md)'s rule that anything
 touching the outside world is `UNVERIFIED`. Note the cost trade: the networked
 default pays ~80 tokens of warning per tool call, which is the honest price of a
 shell that can reach the internet.
+
+### Planned: workspace taint replaces network posture (decided, not built)
+
+Reviewing real run transcripts surfaced two gaps in the network-posture rule:
+
+- **Too noisy.** With the network up, every result — `ls`, `python3 --version` —
+  pays the full injection warning. Beyond token cost, an identical warning on
+  every call loses salience (cry-wolf), exactly where a genuinely fetched
+  payload needs the model's suspicion.
+- **Too lax.** `network="none"` does not mean clean, because taint outlives the
+  session: `/workspace` persists, so a file downloaded in an earlier networked
+  session is still attacker-controlled when `cat`-ed later with the network
+  off; and user-supplied files (audio, PDFs, eval world data) are external
+  content regardless of network posture.
+
+Decided replacement: a **sticky per-workspace taint bit**, persisted alongside
+the workspace. It starts clean and flips permanently when (a) any command runs
+with the network enabled, or (b) external files are mounted in (user files,
+eval fixtures). `run_bash` output is `TRUSTED` only while the network is off
+**and** the workspace is untainted. Deliberately coarse: no per-call command
+parsing (guessing what a bash command touched is a losing game), and trust is
+always assigned by the harness, never by the model — same principle as "the
+model never edits its own payload". Pairs with the slim envelope planned in
+[registry.md](registry.md#trust-and-the-safety-envelope).
 
 ### Divergences from the spec (deliberate, v0)
 

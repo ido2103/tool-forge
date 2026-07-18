@@ -71,6 +71,20 @@ Config comes from `OrchestratorSettings` (`max_iterations`, `max_tokens_per_turn
 - Author skills after successful multi-step tasks, and a companion usage skill for every
   newly forged tool before its first live use.
 
+## Planned: `ask_user` clarification tool (next slice, designed 2026-07-18)
+
+Not yet built — this section is the handoff design for a dedicated session.
+
+**Motivation.** In the first real REPL run ("I want to feed you audio files and
+have you transcribe them", local transcript `runs/20260718T184024884822Z.jsonl`,
+gitignored), the agent performed superbly but silently made several
+*consequential spec decisions* the user never saw: local Whisper vs. a cloud STT
+API, model size (speed/accuracy), JSON output shape, and ~hundreds of MB of
+model cache written to the persistent workspace. Defensible defaults — but for a
+tool-forging agent, ambiguity at spec time becomes baked-in tool behavior
+forever. The wall detector's three verdicts (missing tool / misuse / impossible)
+have a fourth in practice: **underspecified — ask**.
+
 ## Design notes
 
 - The harness appends new tool schemas to subsequent API calls between turns; the model
