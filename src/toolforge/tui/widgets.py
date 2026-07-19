@@ -19,15 +19,23 @@ _FLUSH_INTERVAL = 0.05
 
 
 class ChatLog(VerticalScroll):
-    """Scrolling column of chat messages; owns the streaming tail."""
+    """Scrolling column of chat messages; owns the streaming segments.
+
+    A multi-iteration turn interleaves thinking, answer text, and tool calls —
+    the log must preserve that narrative order. Streaming therefore renders as
+    *segments*: a fresh widget starts whenever the stream switches kind
+    (thinking ↔ answer) or crosses a tool boundary (`break_segment`, called
+    when an orchestrator tool call starts), never one accumulated blob per
+    kind. Only the current segment mutates; everything before it is frozen.
+    """
 
     def __init__(self, *, id: str | None = None) -> None:  # noqa: A002 - Textual's own kwarg name
         super().__init__(id=id)
-        self._thinking_buf = ""
-        self._answer_buf = ""
+        self._seg_kind: str | None = None
+        self._seg_widget: Static | None = None
+        self._seg_buf = ""
+        self._answer_total = ""
         self._dirty = False
-        self._tail_thinking: Static | None = None
-        self._tail_answer: Static | None = None
 
     def on_mount(self) -> None:
         self.set_interval(_FLUSH_INTERVAL, self._flush)
@@ -43,55 +51,68 @@ class ChatLog(VerticalScroll):
     def add_error(self, text: str) -> None:
         self._add(text, "error")
 
+    def add_tool_marker(self, text: str) -> None:
+        """Inline dim one-liner marking a tool call in the narrative flow."""
+        self.break_segment()
+        self._add(text, "tool-inline")
+
     def _add(self, text: str, kind: str) -> None:
         # markup=False throughout: chat text is full of literal brackets
         # ([error: …], [tool store: …]) that must never parse as style tags.
         self.mount(Static(text, classes=f"msg {kind}", markup=False))
         self.scroll_end(animate=False)
 
-    # ── the streaming tail ──────────────────────────────────────────────────
+    # ── streaming segments ──────────────────────────────────────────────────
 
     def start_stream(self) -> None:
-        self._thinking_buf = ""
-        self._answer_buf = ""
-        self._tail_thinking = Static("", classes="msg thinking", markup=False)
-        self._tail_answer = Static("", classes="msg assistant", markup=False)
-        self.mount(self._tail_thinking, self._tail_answer)
+        self._seg_kind = None
+        self._seg_widget = None
+        self._seg_buf = ""
+        self._answer_total = ""
 
     def append_thinking(self, text: str) -> None:
-        self._thinking_buf += text
-        self._dirty = True
+        self._append_segment("thinking", text)
 
     def append_answer(self, text: str) -> None:
-        self._answer_buf += text
-        self._dirty = True
+        self._answer_total += text
+        self._append_segment("assistant", text)
+
+    def break_segment(self) -> None:
+        """Freeze the current segment; the next delta starts a new widget."""
+        self._flush(force=True)
+        self._seg_kind = None
+        self._seg_widget = None
+        self._seg_buf = ""
 
     def end_stream(self, final_text: str) -> None:
-        """Freeze the tail. *final_text* is authoritative (the loop's return
+        """Close the stream. *final_text* is authoritative (the loop's return
         value) — a turn that ends via a canned path ("Stopping.", a refusal)
         streamed nothing, and this is where that text still gets rendered."""
-        if final_text and not self._answer_buf:
-            self._answer_buf = final_text
-        self._flush(force=True)
-        for widget in (self._tail_thinking, self._tail_answer):
-            if widget is not None and not str(widget.content):
-                widget.remove()
-        self._tail_thinking = None
-        self._tail_answer = None
+        if final_text and not self._answer_total:
+            self._answer_total = final_text
+            self._append_segment("assistant", final_text)
+        self.break_segment()
 
     @property
     def answer_text(self) -> str:
-        """Current streamed answer text (exposed for tests)."""
-        return self._answer_buf
+        """All answer text streamed this turn (exposed for tests)."""
+        return self._answer_total
+
+    def _append_segment(self, kind: str, text: str) -> None:
+        if self._seg_kind != kind:
+            self.break_segment()
+            self._seg_kind = kind
+            self._seg_widget = Static("", classes=f"msg {kind}", markup=False)
+            self.mount(self._seg_widget)
+        self._seg_buf += text
+        self._dirty = True
 
     def _flush(self, force: bool = False) -> None:
         if not (self._dirty or force):
             return
         self._dirty = False
-        if self._tail_thinking is not None:
-            self._tail_thinking.update(self._thinking_buf)
-        if self._tail_answer is not None:
-            self._tail_answer.update(self._answer_buf)
+        if self._seg_widget is not None:
+            self._seg_widget.update(self._seg_buf)
         self.scroll_end(animate=False)
 
 

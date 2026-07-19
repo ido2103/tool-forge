@@ -223,11 +223,16 @@ class ToolforgeApp(App[None]):
     # ── tool activity + forge narration ─────────────────────────────────────
 
     def on_tool_started(self, message: ToolStarted) -> None:
+        label = f"→ {message.tool_name}" + (f": {message.preview}" if message.preview else "")
         if message.component == "forge_worker":
-            label = f"→ {message.tool_name}" + (f": {message.preview}" if message.preview else "")
             self.forge_panel.add_worker_event(label)
             return
         self.activity.start_call(message.call_id, message.tool_name, message.preview)
+        if self._turn_running:
+            # Keep narrative order in the chat: freeze the streaming segment
+            # and drop an inline marker, so post-tool thinking/text start fresh
+            # widgets below it instead of appending to pre-tool ones.
+            self.chat.add_tool_marker(label)
         if message.tool_name == "forge_tool":
             self.forge_panel.begin(message.call_id)
 

@@ -393,3 +393,57 @@ async def test_quit_during_turn_finishes_it_cleanly(
         # ending with the synthesized "Stopping." assistant message.
         assert app._history[-1].role == "assistant"
         assert app._history[-1].stop_reason == "interrupted"
+
+
+# ── interleaved streaming (thinking → text → tool → thinking …) ──────────────
+
+
+class _InterleavingClient(StreamingFakeClient):
+    """Streams a scripted thinking chunk before each reply's text deltas."""
+
+    def __init__(self, script: list[Any], thinking: list[str]) -> None:
+        super().__init__(script)
+        self._thinking = list(thinking)
+
+    async def send(self, **kwargs: Any) -> Any:
+        on_think = kwargs.get("on_thinking_delta")
+        if self._thinking and on_think is not None:
+            await on_think(self._thinking.pop(0))
+        return await super().send(**kwargs)
+
+
+async def test_stream_interleaves_thinking_text_and_tools(
+    sandbox_settings: SandboxSettings,
+) -> None:
+    # Two iterations: think → intermediate text → tool call, then think → answer.
+    # Each block must render as its own widget, in narrative order — never
+    # thinking appended to thinking across a tool boundary.
+    client = _InterleavingClient(
+        [
+            assistant_tool_use(("tu_1", "echo", {"text": "x"}), text="let me check"),
+            assistant_text("done"),
+        ],
+        ["first thoughts", "second thoughts"],
+    )
+    host = make_stub_host(sandbox_settings, [], client=client)
+    app = ToolforgeApp(host)
+    async with app.run_test() as pilot:
+        await app.workers.wait_for_complete()
+        await app.handle_submit("go")
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+
+        kinds = ("user", "thinking", "assistant", "tool-inline", "system", "error")
+        seq = [
+            (next(k for k in kinds if w.has_class(k)), str(w.content))
+            for w in app.chat.query(".msg").results(Static)
+        ]
+        assert seq == [
+            ("user", "» go"),
+            ("thinking", "first thoughts"),
+            ("assistant", "let me check"),
+            ("tool-inline", "→ echo"),
+            ("thinking", "second thoughts"),
+            ("assistant", "done"),
+        ]
+        assert app.chat.answer_text == "let me checkdone"

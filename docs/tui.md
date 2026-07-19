@@ -33,8 +33,12 @@ both are thin *hosts* over the same assembly point
   **before** `App.run()`, so they print to a normal terminal instead of dying
   inside the alternate screen.
 - `widgets.py` — `ChatLog`: per-message `Static`s (all `markup=False` — chat
-  text is full of literal `[...]` brackets) plus a mutable streaming tail;
-  deltas accumulate in string buffers and a ~20 Hz timer flushes what changed,
+  text is full of literal `[...]` brackets). Streaming renders as **segments**:
+  a fresh widget starts whenever the stream switches kind (thinking ↔ answer)
+  or crosses a tool call (which drops a dim inline `→ tool: preview` marker),
+  so a multi-iteration turn reads in narrative order — thinking → text → tool
+  → thinking… — never one accumulated blob per kind. Only the current segment
+  mutates; deltas buffer in a string and a ~20 Hz timer flushes what changed,
   so token-rate updates never thrash layout. `ToolActivity`: one row per
   *orchestrator* tool call (`→ name: preview` → `✓/✗ name (latency)`).
   `ForgePanel`: reveals on a `forge_tool` pre-execute; renders the

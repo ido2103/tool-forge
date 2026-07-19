@@ -78,6 +78,11 @@
     text-style: italic;
 }
 
+.tool-inline {
+    color: $text-muted;
+    margin-top: 1;
+}
+
 .error {
     color: $text-error;
 }
