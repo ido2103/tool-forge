@@ -56,6 +56,10 @@ the loop mutates it in place and mirrors every message to a `Transcript`.
 - **Hooks** (`hooks.py`) fire at `ON_ITERATION` / `ON_TOOL_PRE_EXECUTE` /
   `ON_TOOL_POST_EXECUTE` / `ON_INTERMEDIATE_TEXT` / `ON_RESPONSE`; the REPL uses them for
   one-line status, and evals will attach here later. Handlers are exception-swallowing.
+  **Every fire carries `component`** (the loop's constructor arg: `"orchestrator"`, or
+  `"forge_worker"` for the worker's inner loop) — the forge worker shares the host's
+  `HookManager`, and `component` is how a renderer keeps the worker's inner-loop
+  events out of the orchestrator's chat stream.
 
 Config comes from `OrchestratorSettings` (`max_iterations`, `max_tokens_per_turn`,
 `system_prompt_path`, `runs_dir`).

@@ -321,7 +321,9 @@ class Orchestrator:
             stop_reason="interrupted",
         )
         self._append(history, msg)
-        await self._hooks.fire(HookEvent.ON_RESPONSE, text=_INTERRUPTED_TEXT)
+        await self._hooks.fire(
+            HookEvent.ON_RESPONSE, text=_INTERRUPTED_TEXT, component=self._component
+        )
         return _INTERRUPTED_TEXT
 
     # ── Main loop ────────────────────────────────────────────────────────────
@@ -354,7 +356,9 @@ class Orchestrator:
             for iteration in range(1, self._max_iterations + 1):
                 if cancel_event.is_set():
                     return await self._finish_interrupted(history)
-                await self._hooks.fire(HookEvent.ON_ITERATION, iteration=iteration)
+                await self._hooks.fire(
+                    HookEvent.ON_ITERATION, iteration=iteration, component=self._component
+                )
 
                 send_kwargs: dict[str, Any] = dict(
                     messages=history,
@@ -389,13 +393,19 @@ class Orchestrator:
 
                 if stop_reason == "end_turn":
                     self._append(history, response)
-                    await self._hooks.fire(HookEvent.ON_RESPONSE, text=response.text)
+                    await self._hooks.fire(
+                        HookEvent.ON_RESPONSE, text=response.text, component=self._component
+                    )
                     return response.text
 
                 if stop_reason == "tool_use":
                     self._append(history, response)
                     if response.text:
-                        await self._hooks.fire(HookEvent.ON_INTERMEDIATE_TEXT, text=response.text)
+                        await self._hooks.fire(
+                            HookEvent.ON_INTERMEDIATE_TEXT,
+                            text=response.text,
+                            component=self._component,
+                        )
                     tool_calls = [
                         ToolCall(id=b.id, name=b.name, input=b.input)
                         for b in response.tool_use_blocks
@@ -422,7 +432,9 @@ class Orchestrator:
 
                 if stop_reason in ("max_tokens", "model_context_window_exceeded"):
                     self._append(history, response)
-                    await self._hooks.fire(HookEvent.ON_RESPONSE, text=response.text)
+                    await self._hooks.fire(
+                        HookEvent.ON_RESPONSE, text=response.text, component=self._component
+                    )
                     return response.text
 
                 if stop_reason == "pause_turn":
@@ -431,7 +443,9 @@ class Orchestrator:
 
                 if stop_reason == "stop_sequence":
                     self._append(history, response)
-                    await self._hooks.fire(HookEvent.ON_RESPONSE, text=response.text)
+                    await self._hooks.fire(
+                        HookEvent.ON_RESPONSE, text=response.text, component=self._component
+                    )
                     return response.text
 
                 if stop_reason == "refusal":
@@ -442,7 +456,9 @@ class Orchestrator:
                         stop_reason="refusal",
                     )
                     self._append(history, refusal_msg)
-                    await self._hooks.fire(HookEvent.ON_RESPONSE, text=_REFUSAL_TEXT)
+                    await self._hooks.fire(
+                        HookEvent.ON_RESPONSE, text=_REFUSAL_TEXT, component=self._component
+                    )
                     return _REFUSAL_TEXT
 
                 raise AgentError(f"unexpected stop_reason: {stop_reason!r}")
@@ -477,7 +493,9 @@ class Orchestrator:
             except asyncio.CancelledError:
                 return await self._finish_interrupted(history)
             self._append(history, wrapup)
-            await self._hooks.fire(HookEvent.ON_RESPONSE, text=wrapup.text)
+            await self._hooks.fire(
+                HookEvent.ON_RESPONSE, text=wrapup.text, component=self._component
+            )
             return wrapup.text
         finally:
             self.remove_cancel_event(cancel_event)
