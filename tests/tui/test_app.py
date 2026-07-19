@@ -6,17 +6,21 @@ is manual (`uv run toolforge-tui`).
 
 from __future__ import annotations
 
+from typing import Any
+
 from tests.orchestrator._harness import assistant_text, assistant_tool_use
 
 from toolforge.config import SandboxSettings
+from toolforge.orchestrator.ask_user import build_ask_user
 from toolforge.orchestrator.hooks import HookEvent
 from toolforge.providers import PermanentProviderError
 from toolforge.tui.app import ToolforgeApp
-from textual.widgets import Static
+from toolforge.tui.screens import AskUserScreen
+from textual.widgets import Input, Static
 
 from toolforge.tui.widgets import ChatLog
 
-from tests.tui._harness import chat_texts, make_stub_host
+from tests.tui._harness import chat_texts, make_stub_host, tool_result_text
 
 
 async def test_boot_enables_input_and_shows_findings(sandbox_settings: SandboxSettings) -> None:
@@ -249,3 +253,103 @@ async def test_forge_failure_marks_panel(sandbox_settings: SandboxSettings) -> N
         )
         await pilot.pause()
         assert "✗" in app.forge_panel.status_text
+
+
+# ── ask_user modal ───────────────────────────────────────────────────────────
+
+
+ASK_INPUT = {
+    "question": "Which STT backend?",
+    "context": "Local is free but slow; cloud is fast but paid.",
+    "options": [
+        {"label": "Local Whisper", "description": "free, slower", "recommended": True},
+        {"label": "Cloud API", "description": "fast, costs money"},
+    ],
+}
+
+
+def _ask_host(sandbox_settings: SandboxSettings) -> tuple[ToolforgeApp, list[str]]:
+    """App whose stub host has ask_user wired to the modal, plus its script."""
+    host = make_stub_host(
+        sandbox_settings,
+        [assistant_tool_use(("tu_1", "ask_user", dict(ASK_INPUT))), assistant_text("done")],
+    )
+    app = ToolforgeApp(host)
+    host.registry.register(build_ask_user(app.ask_user))
+    return app, []
+
+
+async def _wait_for_modal(app: ToolforgeApp, pilot: Any) -> AskUserScreen:
+    for _ in range(100):
+        await pilot.pause()
+        if isinstance(app.screen, AskUserScreen):
+            return app.screen
+    raise AssertionError("ask_user modal never appeared")
+
+
+async def test_ask_user_button_returns_label_verbatim(
+    sandbox_settings: SandboxSettings,
+) -> None:
+    app, _ = _ask_host(sandbox_settings)
+    async with app.run_test() as pilot:
+        await app.workers.wait_for_complete()
+        await app.handle_submit("transcribe my audio")
+        await _wait_for_modal(app, pilot)
+        await pilot.click("#opt-0")
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        tool_results = tool_result_text(app._history[2])
+        assert 'User chose: "Local Whisper"' in tool_results
+        assert app.chat.answer_text == "done"
+
+
+async def test_ask_user_free_text_answer(sandbox_settings: SandboxSettings) -> None:
+    app, _ = _ask_host(sandbox_settings)
+    async with app.run_test() as pilot:
+        await app.workers.wait_for_complete()
+        await app.handle_submit("transcribe my audio")
+        screen = await _wait_for_modal(app, pilot)
+        free = screen.query_one("#ask-free", Input)
+        free.focus()
+        await pilot.pause()
+        await pilot.press(*"use deepgram", "enter")
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        tool_results = tool_result_text(app._history[2])
+        assert "User answered: use deepgram" in tool_results
+
+
+async def test_ask_user_modal_free_text_never_reaches_prompt(
+    sandbox_settings: SandboxSettings,
+) -> None:
+    app, _ = _ask_host(sandbox_settings)
+    async with app.run_test() as pilot:
+        await app.workers.wait_for_complete()
+        await app.handle_submit("transcribe my audio")
+        screen = await _wait_for_modal(app, pilot)
+        screen.query_one("#ask-free", Input).focus()
+        await pilot.pause()
+        await pilot.press(*"hello", "enter")
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        # the modal's answer must not have been dispatched as a new task
+        user_msgs = [m for m in app._history if m.role == "user" and not tool_result_text(m)]
+        assert len(user_msgs) == 1
+
+
+async def test_stop_during_question_dismisses_modal(
+    sandbox_settings: SandboxSettings,
+) -> None:
+    app, _ = _ask_host(sandbox_settings)
+    async with app.run_test() as pilot:
+        await app.workers.wait_for_complete()
+        await app.handle_submit("transcribe my audio")
+        await _wait_for_modal(app, pilot)
+        app.action_stop_turn()
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        assert not isinstance(app.screen, AskUserScreen)
+        assert not app.turn_running
+        # the aborted question surfaces as an [ABORTED] tool result, never an answer
+        tool_results = tool_result_text(app._history[2])
+        assert "ABORTED" in tool_results

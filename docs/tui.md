@@ -1,8 +1,8 @@
 # TUI
 
-**Status: chat pane with streamed thinking/answer, slash commands, boot/reset
-flows, tool-activity sidebar, and the live forge panel are implemented over
-`bootstrap.build_host`. The `ask_user` modal is the next slice.**
+**Status: implemented — chat pane with streamed thinking/answer, slash
+commands, boot/reset flows, tool-activity sidebar, live forge panel, and the
+`ask_user` modal, all over `bootstrap.build_host`.**
 
 The rich interactive surface (`src/toolforge/tui/`, `toolforge-tui` console
 script). The stdlib REPL (`toolforge`) remains the dependency-free fallback;
@@ -50,7 +50,13 @@ both are thin *hosts* over the same assembly point
   `make_delta_callbacks(app)` for `Orchestrator.run`, `attach_hooks(app,
   hooks)` registering `ON_TOOL_PRE/POST_EXECUTE` + `ON_FORGE_PHASE` observers
   that post messages and return.
-- `styles.tcss` — layout + message styling.
+- `screens.py` — `AskUserScreen(ModalScreen[str])`: question, context, one
+  button per option (recommended = primary + focused), free-text `Input`. A
+  button dismisses with the option's **verbatim label** (the tool handler's
+  label check depends on it); empty free text never answers; there is no
+  escape-dismiss — the only way past the question is answering or cancelling
+  the turn.
+- `styles.tcss` — layout + message + modal styling.
 
 ## Concurrency model
 
@@ -70,6 +76,17 @@ Textual owns the asyncio loop; nothing runs on threads.
   the REPL's Ctrl-C. The Textual worker is *never* cancelled: the loop's
   cancel-event path ends the turn cleanly ("Stopping."), keeps history
   consistent, and fires tool cancel-handlers.
+- **ask_user wiring**: `app.ask_user(request)` awaits
+  `push_screen_wait(AskUserScreen(request))` — it runs inside the tool's task,
+  a child of the turn worker, so the active-worker context is present (verified
+  by pilot test). `main()` bridges the build-order gap with `AskUserProxy`:
+  `build_host` gets the proxy as its callback before the app exists, and the
+  app is bound to it after construction. Turn cancellation while a question is
+  open cancels the await; the handler dismisses the orphaned modal and the
+  question resolves as an `[ABORTED]` tool result — never a fabricated answer.
+  The modal's `Input.Submitted` is `stop()`ped so an answer can't leak into the
+  app's prompt handler as a new task; `serial_group="user"` already guarantees
+  at most one modal at a time.
 
 ## Commands & bindings
 

@@ -85,3 +85,41 @@
 #prompt {
     margin: 0 1;
 }
+
+AskUserScreen {
+    align: center middle;
+}
+
+#ask-dialog {
+    width: 70%;
+    max-width: 90;
+    height: auto;
+    max-height: 80%;
+    background: $surface;
+    border: thick $accent;
+    padding: 1 2;
+}
+
+#ask-question {
+    text-style: bold;
+    margin-bottom: 1;
+}
+
+#ask-context {
+    color: $text-muted;
+    margin-bottom: 1;
+}
+
+#ask-dialog Button {
+    width: 100%;
+    margin-top: 1;
+}
+
+.ask-desc {
+    color: $text-muted;
+    margin: 0 0 0 2;
+}
+
+#ask-free {
+    margin-top: 1;
+}

@@ -14,7 +14,7 @@ from toolforge.forge import CandidateStore
 from toolforge.orchestrator.bootstrap import Host
 from toolforge.orchestrator.hooks import HookManager
 from toolforge.orchestrator.loop import Orchestrator
-from toolforge.providers import Message
+from toolforge.providers import Message, ToolResultBlock
 from toolforge.registry import ToolContext, ToolRegistry, ToolResult
 from toolforge.sandbox import BashSandbox
 
@@ -24,6 +24,11 @@ _CHUNK = 4
 def chat_texts(app: Any, selector: str = ".msg") -> list[str]:
     """Plain text of every chat message matching *selector*."""
     return [str(w.content) for w in app.chat.query(selector).results(Static)]
+
+
+def tool_result_text(message: Message) -> str:
+    """Concatenated text of every tool_result block in *message*."""
+    return "".join(str(b.content) for b in message.content if isinstance(b, ToolResultBlock))
 
 
 class StreamingFakeClient(FakeProviderClient):

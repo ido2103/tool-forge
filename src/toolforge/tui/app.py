@@ -29,8 +29,10 @@ from toolforge.config import (
     TestAuthorSettings,
     WorkerSettings,
 )
+from toolforge.orchestrator.ask_user import AskUserRequest, AskUserUnavailableError
 from toolforge.orchestrator.bootstrap import Host, build_host
 from toolforge.providers import Message
+from toolforge.tui.screens import AskUserScreen
 from toolforge.tui.bridge import attach_hooks, make_delta_callbacks
 from toolforge.tui.messages import (
     ForgePhase,
@@ -120,6 +122,8 @@ class ToolforgeApp(App[None]):
     # ── input dispatch ──────────────────────────────────────────────────────
 
     async def on_input_submitted(self, event: Input.Submitted) -> None:
+        if event.input.id != "prompt":  # e.g. the ask_user modal's free-text field
+            return
         text = event.value.strip()
         event.input.value = ""
         if text:
@@ -231,6 +235,24 @@ class ToolforgeApp(App[None]):
     def on_forge_phase(self, message: ForgePhase) -> None:
         self.forge_panel.set_phase(message.tool, message.phase, message.extra)
 
+    # ── ask_user modal ──────────────────────────────────────────────────────
+
+    async def ask_user(self, request: AskUserRequest) -> str:
+        """The host `AskUserCallback`: push the modal, await the answer.
+
+        Runs inside the ask_user tool's task (a child of the turn worker, so
+        Textual's active-worker context is present for ``push_screen_wait``).
+        On turn cancellation the await is cancelled — dismiss the orphaned
+        modal before re-raising so the screen stack stays clean.
+        """
+        screen = AskUserScreen(request)
+        try:
+            return await self.push_screen_wait(screen)
+        except asyncio.CancelledError:
+            if self.screen is screen:
+                self.pop_screen()
+            raise
+
     # ── actions ─────────────────────────────────────────────────────────────
 
     def action_stop_turn(self) -> None:
@@ -246,20 +268,36 @@ class ToolforgeApp(App[None]):
         self.chat.add_system("(history cleared)")
 
 
-def _default_host() -> Host:
+class AskUserProxy:
+    """Late binding: ``build_host`` needs the callback before the app exists."""
+
+    def __init__(self) -> None:
+        self._app: ToolforgeApp | None = None
+
+    def bind(self, app: ToolforgeApp) -> None:
+        self._app = app
+
+    async def __call__(self, request: AskUserRequest) -> str:
+        if self._app is None:
+            raise AskUserUnavailableError("the TUI is not running")
+        return await self._app.ask_user(request)
+
+
+def _default_host(proxy: AskUserProxy) -> Host:
     return build_host(
         AnthropicSettings(),
         OrchestratorSettings(),
         SandboxSettings(),
         WorkerSettings(),
         TestAuthorSettings(),
-        ask_user=None,  # the modal callback lands in the ask_user slice
+        ask_user=proxy,
     )
 
 
 def main() -> None:
+    proxy = AskUserProxy()
     try:
-        host = _default_host()
+        host = _default_host(proxy)
     except ValidationError as exc:
         # Almost always missing/invalid credentials or sandbox config.
         print(
@@ -273,8 +311,10 @@ def main() -> None:
         # e.g. the boot-time cross-model separation check.
         print(f"Configuration error: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
+    app = ToolforgeApp(host)
+    proxy.bind(app)
     try:
-        ToolforgeApp(host).run()
+        app.run()
     except asyncio.CancelledError:  # a hard teardown mid-turn; nothing to save
         raise SystemExit(130) from None
 
