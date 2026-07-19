@@ -8,8 +8,8 @@ Environment is managed with `uv` (Python 3.12+); run everything through `uv run`
 
 ```bash
 uv sync                                        # install/refresh deps (incl. dev group)
-uv run toolforge                               # stdlib REPL (fallback surface)
-uv run toolforge-tui                           # Textual TUI (main interactive surface)
+uv run toolforge                               # Textual TUI (main interactive surface)
+uv run toolforge-repl                          # stdlib REPL (fallback surface)
 uv run pytest                                  # run all tests
 uv run pytest tests/test_smoke.py::test_package_imports   # run a single test
 uv run ruff check .                            # lint

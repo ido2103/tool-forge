@@ -19,8 +19,8 @@ dependencies = [
 ]
 
 [project.scripts]
-toolforge = "toolforge.orchestrator.repl:main"
-toolforge-tui = "toolforge.tui.app:main"
+toolforge = "toolforge.tui.app:main"
+toolforge-repl = "toolforge.orchestrator.repl:main"
 
 [build-system]
 requires = ["uv_build>=0.11.29,<0.12.0"]

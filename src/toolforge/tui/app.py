@@ -20,6 +20,7 @@ from pydantic import ValidationError
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
+from textual.screen import ModalScreen
 from textual.widgets import Footer, Header, Input
 
 from toolforge.config import (
@@ -126,6 +127,15 @@ class ToolforgeApp(App[None]):
         self.prompt.focus()
 
     # ── input dispatch ──────────────────────────────────────────────────────
+
+    def on_click(self) -> None:
+        """Clicking anywhere refocuses the prompt — the app is a chat, and the
+        cursor belongs in the input. Never steals focus from a modal (the
+        ask_user screen owns interaction until answered)."""
+        if isinstance(self.screen, ModalScreen):
+            return
+        if not self.prompt.disabled:
+            self.prompt.focus()
 
     async def on_input_submitted(self, event: Input.Submitted) -> None:
         if event.input.id != "prompt":  # e.g. the ask_user modal's free-text field

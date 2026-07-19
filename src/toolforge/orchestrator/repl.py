@@ -1,7 +1,8 @@
-"""Minimal streaming REPL — talk to the orchestrator from a terminal.
+"""Minimal streaming REPL — the dependency-free fallback surface (the Textual
+TUI on the ``toolforge`` script is the main one).
 
-``toolforge "a task"`` runs one task and exits; ``toolforge`` with no argument
-opens an interactive multi-turn session. The sandbox container is started
+``toolforge-repl "a task"`` runs one task and exits; ``toolforge-repl`` with no
+argument opens an interactive multi-turn session. The sandbox container is started
 eagerly at boot — a clear failure if Docker is down, instead of a mid-task
 surprise. Thinking streams dimmed, answer text plain, and each tool call prints
 a compact one-liner. Ctrl-C requests a graceful stop of the in-flight turn;
@@ -226,7 +227,9 @@ async def _amain(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(prog="toolforge", description="Talk to the toolforge agent.")
+    parser = argparse.ArgumentParser(
+        prog="toolforge-repl", description="Talk to the toolforge agent."
+    )
     parser.add_argument(
         "task",
         nargs="?",

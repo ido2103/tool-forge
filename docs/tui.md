@@ -4,8 +4,8 @@
 commands, boot/reset flows, tool-activity sidebar, live forge panel, and the
 `ask_user` modal, all over `bootstrap.build_host`.**
 
-The rich interactive surface (`src/toolforge/tui/`, `toolforge-tui` console
-script). The stdlib REPL (`toolforge`) remains the dependency-free fallback;
+The main interactive surface (`src/toolforge/tui/`, the `toolforge` console
+script). The stdlib REPL (`toolforge-repl`) remains the dependency-free fallback;
 both are thin *hosts* over the same assembly point
 (`orchestrator/bootstrap.py::build_host`) and the same observation seams
 (streaming callbacks + `HookManager`), so neither adds anything to the core.
@@ -112,7 +112,7 @@ turns, provider-error survival, and the slash commands. The real
 sandbox/model path is manual:
 
 ```bash
-uv run toolforge-tui                 # the app
+uv run toolforge                     # the app
 uv run textual run --dev toolforge.tui.app:ToolforgeApp   # with live CSS reload
 uv run textual console               # log viewer (pair with --dev)
 ```

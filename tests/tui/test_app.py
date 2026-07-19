@@ -447,3 +447,35 @@ async def test_stream_interleaves_thinking_text_and_tools(
             ("assistant", "done"),
         ]
         assert app.chat.answer_text == "let me checkdone"
+
+
+# ── click-to-focus ───────────────────────────────────────────────────────────
+
+
+async def test_click_anywhere_focuses_prompt(sandbox_settings: SandboxSettings) -> None:
+    host = make_stub_host(sandbox_settings, [])
+    app = ToolforgeApp(host)
+    async with app.run_test() as pilot:
+        await app.workers.wait_for_complete()
+        app.chat.focus()
+        await pilot.pause()
+        assert app.focused is not app.prompt
+        await pilot.click("#chat")
+        await pilot.pause()
+        assert app.focused is app.prompt
+
+
+async def test_click_never_steals_focus_from_ask_user_modal(
+    sandbox_settings: SandboxSettings,
+) -> None:
+    app, _ = _ask_host(sandbox_settings)
+    async with app.run_test() as pilot:
+        await app.workers.wait_for_complete()
+        await app.handle_submit("transcribe my audio")
+        screen = await _wait_for_modal(app, pilot)
+        await pilot.click("#ask-dialog")
+        await pilot.pause()
+        assert app.screen is screen  # modal still up, prompt not focused
+        assert app.focused is not app.prompt
+        await pilot.click("#opt-0")
+        await app.workers.wait_for_complete()
