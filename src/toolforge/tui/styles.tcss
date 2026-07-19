@@ -1,0 +1,130 @@
+#body {
+    height: 1fr;
+}
+
+#chat {
+    width: 2fr;
+    padding: 0 1;
+}
+
+#side {
+    width: 1fr;
+    max-width: 48;
+    border-left: solid $panel;
+    padding: 0 1;
+}
+
+#activity {
+    height: 1fr;
+}
+
+#forge {
+    height: 1fr;
+    border-top: solid $panel;
+    padding: 0;
+}
+
+#forge.hidden {
+    display: none;
+}
+
+#forge-status {
+    text-style: bold;
+    color: $warning;
+    padding: 0 0 1 0;
+}
+
+#forge-feed {
+    height: 1fr;
+}
+
+.feed-row {
+    color: $text-muted;
+}
+
+.tool-row {
+    color: $text-muted;
+}
+
+.tool-row.running {
+    color: $accent;
+}
+
+.tool-row.error {
+    color: $text-error;
+}
+
+.msg {
+    margin: 0 0 0 0;
+    width: 100%;
+}
+
+.user {
+    color: $accent;
+    margin-top: 1;
+    text-style: bold;
+}
+
+.thinking {
+    color: $text-muted;
+}
+
+.assistant {
+    margin-top: 1;
+}
+
+.system {
+    color: $text-muted;
+    text-style: italic;
+}
+
+.tool-inline {
+    color: $text-muted;
+    margin-top: 1;
+}
+
+.error {
+    color: $text-error;
+}
+
+#prompt {
+    margin: 0 1;
+}
+
+AskUserScreen {
+    align: center middle;
+}
+
+#ask-dialog {
+    width: 70%;
+    max-width: 90;
+    height: auto;
+    max-height: 80%;
+    background: $surface;
+    border: thick $accent;
+    padding: 1 2;
+}
+
+#ask-question {
+    text-style: bold;
+    margin-bottom: 1;
+}
+
+#ask-context {
+    color: $text-muted;
+    margin-bottom: 1;
+}
+
+#ask-dialog Button {
+    width: 100%;
+    margin-top: 1;
+}
+
+.ask-desc {
+    color: $text-muted;
+    margin: 0 0 0 2;
+}
+
+#ask-free {
+    margin-top: 1;
+}

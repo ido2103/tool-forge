@@ -8,6 +8,8 @@ Environment is managed with `uv` (Python 3.12+); run everything through `uv run`
 
 ```bash
 uv sync                                        # install/refresh deps (incl. dev group)
+uv run toolforge                               # Textual TUI (main interactive surface)
+uv run toolforge-repl                          # stdlib REPL (fallback surface)
 uv run pytest                                  # run all tests
 uv run pytest tests/test_smoke.py::test_package_imports   # run a single test
 uv run ruff check .                            # lint
@@ -89,7 +91,8 @@ later API calls (the model never edits its own payload). v1 forges mid-task
 orchestrator, forge, registry, skills, sandbox, evals, providers (model clients:
 Anthropic for the orchestrator, OpenAI-compatible for the forge worker; ported from
 Zeemon — both must keep implementing the `ProviderClient` protocol so Zeemon's agent
-loop can drop in).
+loop can drop in), tui (Textual surface; the stdlib REPL is the fallback — both
+are thin hosts over `orchestrator/bootstrap.py::build_host`).
 
 **Safety**: all generated code runs in the sandbox — container, no network by default,
 per-tool allowlisted domains; every credential access and execution is logged;

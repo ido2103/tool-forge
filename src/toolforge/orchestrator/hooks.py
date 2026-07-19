@@ -27,6 +27,12 @@ class HookEvent(StrEnum):
     ON_TOOL_POST_EXECUTE = "on_tool_post_execute"
     ON_INTERMEDIATE_TEXT = "on_intermediate_text"
     ON_RESPONSE = "on_response"
+    # Forge build progress (fired by forge/tools.py and forge/worker.py, not the
+    # loop): kwargs are `tool` and `phase` — "authoring_tests" / "tests_ready"
+    # (+test_count) / "building" / "attempt" (+attempt, max_attempts) /
+    # "verifying" / "attempt_failed" (+tampered) / "candidate_ready" (+attempts)
+    # / "failed". A build is minutes long; without these it is dead air.
+    ON_FORGE_PHASE = "on_forge_phase"
 
 
 class HookManager:

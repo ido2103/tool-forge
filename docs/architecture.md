@@ -67,6 +67,9 @@ Each maps to a package under `src/toolforge/` and a doc in this folder:
 - [evals](evals.md) — reuse rate, composition depth, held-out success (the README graphs)
 - [providers](providers.md) — model clients: Anthropic (orchestrator; api-key/OAuth) +
   OpenAI-compatible (forge worker; vLLM/llama.cpp), canonical message types, usage hook
+- [tui](tui.md) — Textual interactive surface (`toolforge`, the default entry
+  point); the stdlib REPL (`toolforge-repl`) is the dependency-free fallback —
+  both are thin hosts over `orchestrator/bootstrap.py::build_host`
 
 Runtime configuration comes from `.env` via `src/toolforge/config.py`
 (pydantic-settings); every variable is documented in `.env.example`.
@@ -82,7 +85,7 @@ Runtime configuration comes from `.env` via `src/toolforge/config.py`
   `stop_reason` state machine, concurrent tool execution (with per-`serial_group`
   FIFO chaining for tools that share state), graceful cancellation, a
   transient-retry, a wrap-up-on-cap, lifecycle hooks, and per-run JSONL transcripts. A
-  stdlib streaming **REPL** (`toolforge` console script) drives it. The **`ask_user`**
+  stdlib streaming **REPL** (`toolforge-repl` console script) drives it. The **`ask_user`**
   tool gives the orchestrator a human-in-the-loop clarification channel: a blocking
   mid-turn question serviced by a host-injected callback (the REPL wires stdin;
   headless hosts simply don't register the tool). The wall detector,

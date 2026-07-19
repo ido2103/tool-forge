@@ -417,6 +417,43 @@ async def test_intermediate_text_fires_hook(make_orchestrator: Build, hooks: Hoo
     assert seen == ["let me check"]
 
 
+async def test_every_hook_fire_carries_component(
+    make_orchestrator: Build, hooks: HookManager
+) -> None:
+    # A host rendering two loops (orchestrator + forge worker) through one
+    # HookManager tells them apart only by `component` — every event must carry it.
+    seen: dict[HookEvent, list[Any]] = {ev: [] for ev in HookEvent}
+    for ev in HookEvent:
+        hooks.register(ev, lambda event=ev, **k: seen[event].append(k.get("component")))
+    orch, _client = make_orchestrator(
+        [
+            assistant_tool_use(("toolu_1", "echo", {"text": "x"}), text="let me check"),
+            assistant_text("done"),
+        ]
+    )
+    await orch.run("go", [], system_prompt="sys")
+    for event in (
+        HookEvent.ON_ITERATION,
+        HookEvent.ON_TOOL_PRE_EXECUTE,
+        HookEvent.ON_TOOL_POST_EXECUTE,
+        HookEvent.ON_INTERMEDIATE_TEXT,
+        HookEvent.ON_RESPONSE,
+    ):
+        assert seen[event], f"{event} never fired"
+        assert seen[event] == ["orchestrator"] * len(seen[event])
+
+
+async def test_interrupted_response_carries_component(
+    make_orchestrator: Build, hooks: HookManager
+) -> None:
+    seen: list[Any] = []
+    hooks.register(HookEvent.ON_RESPONSE, lambda **k: seen.append(k.get("component")))
+    orch, _client = make_orchestrator([assistant_text("never sent")])
+    hooks.register(HookEvent.ON_ITERATION, lambda **k: orch.request_stop())
+    await orch.run("go", [], system_prompt="sys")
+    assert seen == ["orchestrator"]
+
+
 # ── serial groups ────────────────────────────────────────────────────────────
 
 

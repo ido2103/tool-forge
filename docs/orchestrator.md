@@ -56,9 +56,37 @@ the loop mutates it in place and mirrors every message to a `Transcript`.
 - **Hooks** (`hooks.py`) fire at `ON_ITERATION` / `ON_TOOL_PRE_EXECUTE` /
   `ON_TOOL_POST_EXECUTE` / `ON_INTERMEDIATE_TEXT` / `ON_RESPONSE`; the REPL uses them for
   one-line status, and evals will attach here later. Handlers are exception-swallowing.
+  **Every fire carries `component`** (the loop's constructor arg: `"orchestrator"`, or
+  `"forge_worker"` for the worker's inner loop) — the forge worker shares the host's
+  `HookManager`, and `component` is how a renderer keeps the worker's inner-loop
+  events out of the orchestrator's chat stream. The forge additionally fires
+  `ON_FORGE_PHASE` build-progress events (see [forge.md](forge.md)); the REPL
+  renders them as dim one-liners.
 
 Config comes from `OrchestratorSettings` (`max_iterations`, `max_tokens_per_turn`,
 `system_prompt_path`, `runs_dir`).
+
+## Host assembly (`bootstrap.py`)
+
+`build_host(anthropic, orch, sandbox, worker, test_author, *, hooks=None,
+ask_user=None) -> Host` is the single assembly point every surface boots
+through: it validates the cross-model invariant, wires clients, sandbox, forge
+pipeline, registry, transcript, and the loop, and returns a `Host` dataclass
+(`orchestrator`, `sandbox`, `candidates`, `registry`, `hooks`, `system_prompt`,
+`model`, `loaded_tools`, `tool_store_warnings`). Hosts differ only in what they
+inject:
+
+- **`hooks`** — a `HookManager` pre-loaded with the host's observers (the REPL
+  registers its tool one-liners before calling; a richer host attaches its own
+  renderers). `None` builds an empty manager.
+- **`ask_user`** — the host's human answer channel; `None` is the headless
+  contract (tool never registered, schema never reaches the model).
+
+`build_host` performs no I/O beyond reading the persisted toolbox — no container
+start (callers own `sandbox.start()`), no printing: boot findings
+(`loaded_tools`, `tool_store_warnings`) come back on the `Host` for the caller
+to render. The REPL (`repl.py`) is now a thin driver over `build_host`; future
+hosts (TUI, evals, web/MCP) call the same function with their own injections.
 
 ## Responsibilities (from [spec](spec.md))
 

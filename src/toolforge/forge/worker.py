@@ -53,7 +53,7 @@ from toolforge.forge.worker_tools import (
     build_write_tool_code,
     pytest_command,
 )
-from toolforge.orchestrator.hooks import HookManager
+from toolforge.orchestrator.hooks import HookEvent, HookManager
 from toolforge.orchestrator.loop import Orchestrator
 from toolforge.orchestrator.transcript import Transcript
 from toolforge.providers import Message, ProviderClient, ProviderError
@@ -273,6 +273,9 @@ class ForgeWorker:
 
         for attempt in range(1, self._settings.max_attempts + 1):
             self._check_deadline(deadline, "worker run")
+            await self._phase(
+                spec.name, "attempt", attempt=attempt, max_attempts=self._settings.max_attempts
+            )
             try:
                 await inner.run(next_message, history, system_prompt=system)
             except ProviderError as exc:
@@ -288,6 +291,7 @@ class ForgeWorker:
                 raise asyncio.CancelledError
 
             self._check_deadline(deadline, "verification")
+            await self._phase(spec.name, "verifying")
             verification = await self._verify(build_dir, pristine_suite, tests.test_count)
             last_report = verification.report
             if verification.green:
@@ -299,6 +303,7 @@ class ForgeWorker:
                     test_report=verification.report,
                     attempts=attempt,
                 )
+            await self._phase(spec.name, "attempt_failed", tampered=verification.tampered)
             next_message = _render_feedback(attempt, self._settings.max_attempts, verification)
 
         # Deliberately leave build/<name>/ in place: the near-miss artifacts
@@ -308,6 +313,10 @@ class ForgeWorker:
             f"tests still failing after {self._settings.max_attempts} verification "
             f"attempts; last run:\n{last_report}"
         )
+
+    async def _phase(self, tool: str, phase: str, **extra: object) -> None:
+        if self._hooks is not None:
+            await self._hooks.fire(HookEvent.ON_FORGE_PHASE, tool=tool, phase=phase, **extra)
 
     async def _verify(self, build_dir: Path, pristine_suite: str, test_count: int) -> _Verification:
         """The one test run that counts: restore, sweep, run, and grade exactly."""
