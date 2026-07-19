@@ -103,18 +103,42 @@ def tests_fixture(sandbox_settings: SandboxSettings) -> AuthoredTests:
     )
 
 
+INSTALL_OK = (0, b"")
+
+
+class CountingFactory:
+    """Builds a fresh verification sandbox per call, all sharing one runner."""
+
+    def __init__(self, settings: SandboxSettings, runner: FakeRunner) -> None:
+        self._settings = settings
+        self._runner = runner
+        self.calls = 0
+
+    def __call__(self) -> BashSandbox:
+        self.calls += 1
+        return BashSandbox(self._settings, runner=self._runner)
+
+
 def make_worker(
     script: list[Message | Exception],
-    results: list[tuple[int | None, bytes]],
+    verifications: list[tuple[int | None, bytes]],
     sandbox_settings: SandboxSettings,
     worker_settings: WorkerSettings,
     *,
     client: FakeProviderClient | None = None,
     runs_dir: Path | None = None,
-) -> tuple[ForgeWorker, FakeProviderClient, FakeRunner]:
+) -> tuple[ForgeWorker, FakeProviderClient, CountingFactory]:
     client = client if client is not None else FakeProviderClient(script)
-    runner = FakeRunner([(0, b"started"), *results])
-    sandbox = BashSandbox(sandbox_settings, runner=runner)
+    # The worker's shared sandbox (run_bash / run_tests) — deliberately given
+    # NO pytest results: a verification that reached it would fail loudly,
+    # proving the authoritative run only ever uses the fresh containers.
+    sandbox = BashSandbox(sandbox_settings, runner=FakeRunner([(0, b"started")]))
+    # Each verification consumes start + pytest install + the suite run from
+    # its own fresh container.
+    verify_runner = FakeRunner(
+        [item for outcome in verifications for item in [(0, b"started"), INSTALL_OK, outcome]]
+    )
+    factory = CountingFactory(sandbox_settings, verify_runner)
     worker = ForgeWorker(
         client,
         sandbox,
@@ -122,8 +146,9 @@ def make_worker(
         worker_settings,
         model="worker-test",
         runs_dir=runs_dir,
+        verify_sandbox_factory=factory,
     )
-    return worker, client, runner
+    return worker, client, factory
 
 
 def build_dir(sandbox_settings: SandboxSettings) -> Path:
@@ -291,6 +316,43 @@ async def test_tamper_fails_attempt_even_when_green(
     assert "restored or removed" in feedback_text
     assert "build/slugify/test_tool.py" in feedback_text
     assert "conftest.py" in feedback_text
+
+
+# ── verification isolation ───────────────────────────────────────────────────
+
+
+async def test_fresh_verification_container_per_attempt(
+    sandbox_settings: SandboxSettings,
+    worker_settings: WorkerSettings,
+    spec: ToolSpec,
+    tests_fixture: AuthoredTests,
+) -> None:
+    # The shared sandbox is riggable via the worker's run_bash, so every
+    # authoritative run must come from a container built fresh by the factory.
+    worker, _, factory = make_worker(
+        [write_reply(), done_reply(), write_reply(), done_reply()],
+        [RED, GREEN],
+        sandbox_settings,
+        worker_settings,
+    )
+    result = await worker.build(spec, tests_fixture)
+    assert result.attempts == 2
+    assert factory.calls == 2  # one throwaway container per verification
+
+
+async def test_verification_pytest_install_failure_raises(
+    sandbox_settings: SandboxSettings,
+    worker_settings: WorkerSettings,
+    spec: ToolSpec,
+    tests_fixture: AuthoredTests,
+) -> None:
+    worker, _, factory = make_worker(
+        [write_reply(), done_reply()], [], sandbox_settings, worker_settings
+    )
+    # Override the scripted install with a failure inside the fresh container.
+    factory._runner._results[:] = [(0, b"started"), (1, b"no network")]
+    with pytest.raises(WorkerError, match="verification container"):
+        await worker.build(spec, tests_fixture)
 
 
 # ── cancellation, deadline, provider errors ──────────────────────────────────

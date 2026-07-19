@@ -201,12 +201,21 @@ last failure log for orchestrator escalation.
   pytest config files (`conftest.py`, `pytest.ini`, `tox.ini`, `setup.cfg`,
   `pyproject.toml`) from the build dir, `build/`, and the workspace root —
   pytest walks ancestor directories for config discovery, (3) reruns the suite
-  in the sandbox, and (4) requires *exactly* the authored test count to PASS
-  (exit 0 alone is spoofable via `os._exit(0)` or partial collection).
+  **in a fresh, throwaway container started from the image for that one run**,
+  and (4) requires *exactly* the authored test count to PASS (exit 0 alone is
+  spoofable via `os._exit(0)` or partial collection).
   **Tampering fails the attempt even if the restored suite passes**; the
   feedback names the restored/removed files. The system prompt discloses the
   mechanism up front and offers the escape valve: report a test believed to
   contradict the spec rather than working around it.
+  The fresh container matters because the worker's `run_bash` has
+  unrestricted shell access to the session's *shared* container: anything
+  there outside `/workspace` (the `python3`/`pytest` binaries,
+  `sitecustomize.py`, shell rc files) must be presumed rigged and cannot be
+  restored host-side. A throwaway container carries none of it — only the
+  bind-mounted `/workspace`, which is exactly the state steps 1–2 restore.
+  Cost: one container start + pytest install (~seconds) per verification, at
+  forge time only.
 - **Worker transcripts**: each build mirrors the worker conversation to
   `runs/forge-<name>-<ts>.jsonl` (same canonical `Message` JSONL as
   orchestrator runs) — the debugging record and future eval substrate.

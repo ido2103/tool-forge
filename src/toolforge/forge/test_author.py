@@ -48,7 +48,7 @@ _COLLECT_COUNT_RE = re.compile(r"(\d+) tests? collected")
 _TEST_RESULT_RE = re.compile(r"^(\S+::\S+)\s+(PASSED|FAILED|ERROR)", re.MULTILINE)
 
 _REPORT_CAP = 8_000
-_INSTALL_TIMEOUT = 240
+INSTALL_TIMEOUT = 240
 _COLLECT_TIMEOUT = 60
 _STUB_RUN_TIMEOUT = 120
 
@@ -59,7 +59,7 @@ def run(**kwargs):
 
 # Ensure pytest is importable in the container; python:3.12-slim ships without
 # it. The || arm only runs on a cold container, so the check stays cheap.
-_ENSURE_PYTEST_CMD = (
+ENSURE_PYTEST_CMD = (
     "python3 -m pytest --version >/dev/null 2>&1 || python3 -m pip install --quiet pytest"
 )
 
@@ -250,7 +250,7 @@ class TestAuthor:
             raise
 
     async def _author(self, spec: ToolSpec, build_dir: Path, deadline: float) -> AuthoredTests:
-        install = await self._sandbox.run(_ENSURE_PYTEST_CMD, timeout=_INSTALL_TIMEOUT)
+        install = await self._sandbox.run(ENSURE_PYTEST_CMD, timeout=INSTALL_TIMEOUT)
         if install.timed_out or install.exit_code != 0:
             raise TestAuthorError(
                 "pytest could not be installed in the sandbox (is the container "

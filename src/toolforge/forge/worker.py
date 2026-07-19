@@ -19,6 +19,14 @@ legitimate writes pytest config to the workspace root), reruns the suite, and
 requires *exactly* the authored test count to pass. The worker's own
 ``run_tests`` calls are advisory; only the harness run counts, and any
 tampering fails the attempt even if the restored suite passes.
+
+The authoritative run executes in a **fresh, throwaway container per
+verification** — never the session's shared container. The worker's
+``run_bash`` has unrestricted shell access to the shared container, so
+anything there (the ``python3``/``pytest`` binaries, ``sitecustomize.py``,
+shell rc files) must be presumed rigged; only ``/workspace`` state is
+restorable host-side. A container started fresh from the image cannot carry
+any of that, so the verification's stdout is genuinely pytest's.
 """
 
 from __future__ import annotations
@@ -33,7 +41,12 @@ from pathlib import Path
 
 from toolforge.config import SandboxSettings, WorkerSettings
 from toolforge.forge.candidates import ToolSpec
-from toolforge.forge.test_author import AuthoredTests, parse_stub_run
+from toolforge.forge.test_author import (
+    ENSURE_PYTEST_CMD,
+    INSTALL_TIMEOUT,
+    AuthoredTests,
+    parse_stub_run,
+)
 from toolforge.forge.worker_tools import (
     TEST_RUN_TIMEOUT,
     build_run_tests,
@@ -203,6 +216,7 @@ class ForgeWorker:
         model: str,
         hooks: HookManager | None = None,
         runs_dir: Path | None = None,
+        verify_sandbox_factory: Callable[[], BashSandbox] | None = None,
     ) -> None:
         self._client = client
         self._sandbox = sandbox
@@ -211,6 +225,12 @@ class ForgeWorker:
         self._model = model
         self._hooks = hooks
         self._runs_dir = runs_dir
+        # The authoritative verification runs in a fresh, throwaway container
+        # (never the shared one the worker can rig via run_bash); the factory
+        # is a seam so unit tests can substitute a fake runner.
+        self._verify_sandbox_factory = verify_sandbox_factory or (
+            lambda: BashSandbox(sandbox_settings)
+        )
         # Seam for deadline tests; production always uses the monotonic clock.
         self._clock: Callable[[], float] = time.monotonic
 
@@ -308,7 +328,23 @@ class ForgeWorker:
                     config.unlink()
                     tampered.append(str(config.relative_to(workspace)))
 
-        result = await self._sandbox.run(pytest_command(build_dir.name), timeout=TEST_RUN_TIMEOUT)
+        # The one run that counts happens in a container started fresh from
+        # the image: nothing the worker did to the shared container (rigged
+        # binaries, sitecustomize, shell rc) can exist there. Only /workspace
+        # is carried over — and that is exactly the state restored above.
+        verify_sandbox = self._verify_sandbox_factory()
+        try:
+            install = await verify_sandbox.run(ENSURE_PYTEST_CMD, timeout=INSTALL_TIMEOUT)
+            if install.timed_out or install.exit_code != 0:
+                raise WorkerError(
+                    "pytest could not be installed in the verification container "
+                    f"(is the sandbox offline?): {install.stdout}"
+                )
+            result = await verify_sandbox.run(
+                pytest_command(build_dir.name), timeout=TEST_RUN_TIMEOUT
+            )
+        finally:
+            verify_sandbox.teardown()
         report, _ = truncate_output(result.stdout, _REPORT_CAP)
         if result.timed_out:
             return _Verification(green=False, report=report, tampered=tampered)
