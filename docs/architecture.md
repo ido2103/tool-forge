@@ -67,6 +67,9 @@ Each maps to a package under `src/toolforge/` and a doc in this folder:
 - [evals](evals.md) — reuse rate, composition depth, held-out success (the README graphs)
 - [providers](providers.md) — model clients: Anthropic (orchestrator; api-key/OAuth) +
   OpenAI-compatible (forge worker; vLLM/llama.cpp), canonical message types, usage hook
+- [tui](tui.md) — Textual interactive surface (`toolforge-tui`); the stdlib REPL
+  (`toolforge`) is the dependency-free fallback — both are thin hosts over
+  `orchestrator/bootstrap.py::build_host`
 
 Runtime configuration comes from `.env` via `src/toolforge/config.py`
 (pydantic-settings); every variable is documented in `.env.example`.

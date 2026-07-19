@@ -1,0 +1,36 @@
+#chat {
+    height: 1fr;
+    padding: 0 1;
+}
+
+.msg {
+    margin: 0 0 0 0;
+    width: 100%;
+}
+
+.user {
+    color: $accent;
+    margin-top: 1;
+    text-style: bold;
+}
+
+.thinking {
+    color: $text-muted;
+}
+
+.assistant {
+    margin-top: 1;
+}
+
+.system {
+    color: $text-muted;
+    text-style: italic;
+}
+
+.error {
+    color: $text-error;
+}
+
+#prompt {
+    margin: 0 1;
+}

@@ -15,10 +15,12 @@ dependencies = [
     "openai>=2.45.0",
     "pydantic>=2.13.4",
     "pydantic-settings>=2.14.2",
+    "textual>=1.0",
 ]
 
 [project.scripts]
 toolforge = "toolforge.orchestrator.repl:main"
+toolforge-tui = "toolforge.tui.app:main"
 
 [build-system]
 requires = ["uv_build>=0.11.29,<0.12.0"]
@@ -31,6 +33,7 @@ dev = [
     "pytest-asyncio>=1.4.0",
     "respx>=0.23.1",
     "ruff>=0.15.21",
+    "textual-dev>=1.8.0",
 ]
 
 [tool.ruff]

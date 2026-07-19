@@ -73,7 +73,8 @@ ask_user=None) -> Host` is the single assembly point every surface boots
 through: it validates the cross-model invariant, wires clients, sandbox, forge
 pipeline, registry, transcript, and the loop, and returns a `Host` dataclass
 (`orchestrator`, `sandbox`, `candidates`, `registry`, `hooks`, `system_prompt`,
-`loaded_tools`, `tool_store_warnings`). Hosts differ only in what they inject:
+`model`, `loaded_tools`, `tool_store_warnings`). Hosts differ only in what they
+inject:
 
 - **`hooks`** — a `HookManager` pre-loaded with the host's observers (the REPL
   registers its tool one-liners before calling; a richer host attaches its own

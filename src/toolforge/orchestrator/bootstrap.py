@@ -55,6 +55,7 @@ class Host:
     registry: ToolRegistry
     hooks: HookManager
     system_prompt: str
+    model: str  # the orchestrator's model id, for status displays
     loaded_tools: list[str]
     tool_store_warnings: list[str]
 
@@ -144,6 +145,7 @@ def build_host(
         registry=registry,
         hooks=hooks,
         system_prompt=system_prompt,
+        model=anthropic.model,
         loaded_tools=loaded,
         tool_store_warnings=warnings,
     )
