@@ -116,7 +116,7 @@ def build_host(
         registry.register(build_ask_user(ask_user))
     candidates = CandidateStore()
     registry.register(
-        build_forge_tool(candidates, registry, test_author=test_author, worker=worker)
+        build_forge_tool(candidates, registry, test_author=test_author, worker=worker, hooks=hooks)
     )
     registry.register(build_register_tool(candidates, registry, sandbox, sandbox_settings))
 

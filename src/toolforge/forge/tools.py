@@ -28,6 +28,7 @@ from toolforge.forge.promote import PromotionError, promote_candidate
 from toolforge.forge.runtime import build_forged_tool
 from toolforge.forge.test_author import AuthoredTests, TestAuthor, TestAuthorError
 from toolforge.forge.worker import BuildResult, ForgeWorker, WorkerError
+from toolforge.orchestrator.hooks import HookEvent, HookManager
 from toolforge.registry import RegisteredTool, ToolContext, ToolRegistry, ToolResult
 from toolforge.sandbox import BashSandbox, truncate_output
 from toolforge.sandbox.run_bash import SANDBOX_SERIAL_GROUP
@@ -230,14 +231,21 @@ def build_forge_tool(
     *,
     test_author: TestAuthor,
     worker: ForgeWorker,
+    hooks: HookManager | None = None,
 ) -> RegisteredTool:
     """Build ``forge_tool`` bound to *store*, the live *registry*, and the build stages.
 
     TRUSTED: its output is harness-generated text, never external content.
     Carries ``SANDBOX_SERIAL_GROUP``: a build occupies the shared container for
     minutes, so batched sibling sandbox calls must queue behind it, not
-    interleave with the worker's commands.
+    interleave with the worker's commands. *hooks* (the host's manager) gets
+    ``ON_FORGE_PHASE`` fires around the two build stages — the test author is
+    otherwise silent for minutes.
     """
+
+    async def _phase(tool: str, phase: str, **extra: Any) -> None:
+        if hooks is not None:
+            await hooks.fire(HookEvent.ON_FORGE_PHASE, tool=tool, phase=phase, **extra)
 
     async def handler(inp: dict[str, Any], ctx: ToolContext) -> ToolResult:
         if _blank(inp.get("gap_analysis")):
@@ -292,19 +300,24 @@ def build_forge_tool(
 
         spec = ToolSpec.from_validated_input(inp)
 
+        await _phase(spec.name, "authoring_tests")
         try:
             tests = await test_author.author_tests(spec)
         except TestAuthorError as exc:
+            await _phase(spec.name, "failed")
             return _error(
                 f"[forge_tool error: test authoring failed — {exc}. No candidate was "
                 "created and the build directory was removed. Revise the spec (a "
                 "sharper behavior contract and concrete examples usually fix this) "
                 "and re-forge, or fall back to existing tools.]"
             )
+        await _phase(spec.name, "tests_ready", test_count=tests.test_count)
 
+        await _phase(spec.name, "building")
         try:
             built = await worker.build(spec, tests)
         except WorkerError as exc:
+            await _phase(spec.name, "failed")
             return _error(
                 "[forge_tool error: the worker could not make the test suite pass "
                 f"within its budget. No candidate was created. {exc}\n"
@@ -314,6 +327,7 @@ def build_forge_tool(
                 "revise the spec and re-forge, narrow the tool, or fall back to "
                 "existing tools.]"
             )
+        await _phase(spec.name, "candidate_ready", attempts=built.attempts)
 
         store.put(
             Candidate(

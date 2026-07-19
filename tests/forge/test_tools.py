@@ -21,6 +21,7 @@ from toolforge.forge import (
     build_register_tool,
 )
 from toolforge.forge.manifest import load_manifest
+from toolforge.orchestrator.hooks import HookEvent, HookManager
 from toolforge.registry import RegisteredTool, ToolContext, ToolRegistry, ToolResult
 from toolforge.sandbox.bash import BashSandbox
 from toolforge.sandbox.run_bash import SANDBOX_SERIAL_GROUP, build_run_bash
@@ -80,6 +81,7 @@ class ForgeEnv:
         *,
         author_outcome: AuthoredTests | TestAuthorError = AUTHORED,
         worker_outcome: BuildResult | WorkerError = BUILT,
+        hooks: HookManager | None = None,
     ) -> None:
         self.settings = settings
         self.store = CandidateStore()
@@ -89,7 +91,7 @@ class ForgeEnv:
         self.author = FakeTestAuthor(author_outcome)
         self.worker = FakeWorker(worker_outcome)
         self.forge = build_forge_tool(
-            self.store, self.registry, test_author=self.author, worker=self.worker
+            self.store, self.registry, test_author=self.author, worker=self.worker, hooks=hooks
         )
         self.register = build_register_tool(self.store, self.registry, self.sandbox, settings)
 
@@ -509,3 +511,47 @@ async def test_execute_through_registry_wraps_trusted(env: ForgeEnv) -> None:
     assert isinstance(result.content, str)
     assert 'trust="TRUSTED"' in result.content
     assert "prompt_injection_warning" not in result.content
+
+
+# ── forge phase events ───────────────────────────────────────────────────────
+
+
+def _recording_hooks() -> tuple[HookManager, list[dict[str, Any]]]:
+    hooks = HookManager()
+    seen: list[dict[str, Any]] = []
+    hooks.register(HookEvent.ON_FORGE_PHASE, lambda **k: seen.append(k))
+    return hooks, seen
+
+
+async def test_phase_events_on_success(sandbox_settings: SandboxSettings) -> None:
+    hooks, seen = _recording_hooks()
+    env = ForgeEnv(sandbox_settings, hooks=hooks)
+    await _call(env.forge, _valid_input())
+    assert [e["phase"] for e in seen] == [
+        "authoring_tests",
+        "tests_ready",
+        "building",
+        "candidate_ready",
+    ]
+    assert all(e["tool"] == "fetch_rss" for e in seen)
+    assert seen[1]["test_count"] == AUTHORED.test_count
+    assert seen[3]["attempts"] == BUILT.attempts
+
+
+async def test_phase_events_on_author_failure(sandbox_settings: SandboxSettings) -> None:
+    hooks, seen = _recording_hooks()
+    env = ForgeEnv(sandbox_settings, author_outcome=TestAuthorError("no red suite"), hooks=hooks)
+    await _call(env.forge, _valid_input())
+    assert [e["phase"] for e in seen] == ["authoring_tests", "failed"]
+
+
+async def test_phase_events_on_worker_failure(sandbox_settings: SandboxSettings) -> None:
+    hooks, seen = _recording_hooks()
+    env = ForgeEnv(sandbox_settings, worker_outcome=WorkerError("budget"), hooks=hooks)
+    await _call(env.forge, _valid_input())
+    assert [e["phase"] for e in seen] == ["authoring_tests", "tests_ready", "building", "failed"]
+
+
+async def test_no_hooks_is_silent_noop(env: ForgeEnv) -> None:
+    result = await _call(env.forge, _valid_input())
+    assert not result.is_error

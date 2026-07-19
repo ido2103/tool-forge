@@ -67,8 +67,18 @@ def _install_tool_oneliners(hooks: HookManager) -> None:
         sys.stdout.write(_dim(f"  {mark} ({kw.get('latency_ms')}ms)\n"))
         sys.stdout.flush()
 
+    def forge_phase(**kw: Any) -> None:
+        detail = ""
+        if kw.get("phase") == "attempt":
+            detail = f" {kw.get('attempt')}/{kw.get('max_attempts')}"
+        elif kw.get("phase") == "tests_ready":
+            detail = f" ({kw.get('test_count')} tests)"
+        sys.stdout.write(_dim(f"  forge[{kw.get('tool')}]: {kw.get('phase')}{detail}\n"))
+        sys.stdout.flush()
+
     hooks.register(HookEvent.ON_TOOL_PRE_EXECUTE, pre)
     hooks.register(HookEvent.ON_TOOL_POST_EXECUTE, post)
+    hooks.register(HookEvent.ON_FORGE_PHASE, forge_phase)
 
 
 async def _ask_via_stdin(request: AskUserRequest) -> str:

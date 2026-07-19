@@ -18,6 +18,7 @@ from toolforge.config import SandboxSettings, WorkerSettings
 from toolforge.forge.candidates import ToolSpec
 from toolforge.forge.test_author import AuthoredTests
 from toolforge.forge.worker import BuildResult, ForgeWorker, WorkerError
+from toolforge.orchestrator.hooks import HookEvent, HookManager
 from toolforge.providers import Message, PermanentProviderError
 from toolforge.sandbox import BashSandbox
 
@@ -127,6 +128,7 @@ def make_worker(
     *,
     client: FakeProviderClient | None = None,
     runs_dir: Path | None = None,
+    hooks: HookManager | None = None,
 ) -> tuple[ForgeWorker, FakeProviderClient, CountingFactory]:
     client = client if client is not None else FakeProviderClient(script)
     # The worker's shared sandbox (run_bash / run_tests) — deliberately given
@@ -145,6 +147,7 @@ def make_worker(
         sandbox_settings,
         worker_settings,
         model="worker-test",
+        hooks=hooks,
         runs_dir=runs_dir,
         verify_sandbox_factory=factory,
     )
@@ -227,6 +230,36 @@ async def test_red_then_green_feeds_pytest_output_back(
     assert "[Attempt 1 of 2]" in feedback_text
     assert "FAILED" in feedback_text
     assert "Fix tool.py" in feedback_text
+
+
+async def test_forge_phase_events_narrate_the_attempt_loop(
+    sandbox_settings: SandboxSettings,
+    worker_settings: WorkerSettings,
+    spec: ToolSpec,
+    tests_fixture: AuthoredTests,
+) -> None:
+    hooks = HookManager()
+    seen: list[dict[str, Any]] = []
+    hooks.register(HookEvent.ON_FORGE_PHASE, lambda **k: seen.append(k))
+    worker, _, _ = make_worker(
+        [write_reply(), done_reply(), write_reply(), done_reply()],
+        [RED, GREEN],
+        sandbox_settings,
+        worker_settings,
+        hooks=hooks,
+    )
+    await worker.build(spec, tests_fixture)
+    assert [e["phase"] for e in seen] == [
+        "attempt",
+        "verifying",
+        "attempt_failed",
+        "attempt",
+        "verifying",
+    ]
+    assert all(e["tool"] == "slugify" for e in seen)
+    assert seen[0]["attempt"] == 1 and seen[0]["max_attempts"] == 2
+    assert seen[2]["tampered"] == []
+    assert seen[3]["attempt"] == 2
 
 
 # ── exhaustion ───────────────────────────────────────────────────────────────

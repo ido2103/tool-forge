@@ -59,7 +59,9 @@ the loop mutates it in place and mirrors every message to a `Transcript`.
   **Every fire carries `component`** (the loop's constructor arg: `"orchestrator"`, or
   `"forge_worker"` for the worker's inner loop) — the forge worker shares the host's
   `HookManager`, and `component` is how a renderer keeps the worker's inner-loop
-  events out of the orchestrator's chat stream.
+  events out of the orchestrator's chat stream. The forge additionally fires
+  `ON_FORGE_PHASE` build-progress events (see [forge.md](forge.md)); the REPL
+  renders them as dim one-liners.
 
 Config comes from `OrchestratorSettings` (`max_iterations`, `max_tokens_per_turn`,
 `system_prompt_path`, `runs_dir`).

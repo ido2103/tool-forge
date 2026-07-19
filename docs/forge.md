@@ -195,6 +195,16 @@ last failure log for orchestrator escalation.
   `max_iterations` tool-call turns each, `max_tokens` per call, and a
   `timeout_seconds` wall-clock deadline checked before every run and
   verification.
+- **Build progress events**: a build is minutes long, so both stages narrate it
+  through the host's `HookManager` as `ON_FORGE_PHASE` fires (kwargs `tool`,
+  `phase`, plus phase-specific extras). `forge_tool` (which takes an optional
+  `hooks=` kwarg, wired by `bootstrap.build_host`) fires `authoring_tests` →
+  `tests_ready` (+`test_count`) → `building` → `candidate_ready` (+`attempts`)
+  or `failed`; the worker's attempt loop fires `attempt`
+  (+`attempt`/`max_attempts`) → `verifying` → `attempt_failed` (+`tampered`)
+  per red round. The worker's inner tool calls additionally stream through the
+  shared manager's `ON_TOOL_PRE/POST_EXECUTE` with `component="forge_worker"`.
+  No handlers registered → every fire is a no-op.
 - **The pristine-suite verification (anti-reward-hack)**: the authored
   `test_tool.py` is captured in driver memory before the worker's first turn.
   Each verification (1) restores it if the on-disk copy differs, (2) sweeps
