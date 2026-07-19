@@ -1,9 +1,8 @@
 # TUI
 
-**Status: scaffold implemented — Textual app with chat pane, streamed
-thinking/answer, slash commands, and boot/reset flows over
-`bootstrap.build_host`. Tool-activity sidebar, live forge panel, and the
-`ask_user` modal are the next slices.**
+**Status: chat pane with streamed thinking/answer, slash commands, boot/reset
+flows, tool-activity sidebar, and the live forge panel are implemented over
+`bootstrap.build_host`. The `ask_user` modal is the next slice.**
 
 The rich interactive surface (`src/toolforge/tui/`, `toolforge-tui` console
 script). The stdlib REPL (`toolforge`) remains the dependency-free fallback;
@@ -14,14 +13,17 @@ both are thin *hosts* over the same assembly point
 ## Layout
 
 ```
-┌ Header (title · model + sandbox status) ─────────────┐
-│ ChatLog (#chat, VerticalScroll)                      │
-│   » user messages (accent, bold)                     │
-│   thinking (muted, streamed)                         │
-│   answers (streamed)                                 │
-│   (system notes, errors)                             │
-├ Input (#prompt) ─────────────────────────────────────┤
-└ Footer (Esc stop · ^N new session) ──────────────────┘
+┌ Header (title · model + sandbox status) ────────────────────────┐
+│ ChatLog (#chat, 2fr)              │ ToolActivity (#activity)    │
+│   » user messages (accent, bold)  │   → run_bash: echo hi       │
+│   thinking (muted, streamed)      │   ✓ run_bash (42ms)         │
+│   answers (streamed)              ├─────────────────────────────┤
+│   (system notes, errors)          │ ForgePanel (#forge; hidden  │
+│                                   │  until a forge_tool call)   │
+│                                   │   forge[x]: attempt 2/4·1:23│
+│                                   │   → write_tool_code …       │
+├ Input (#prompt) ────────────────────────────────────────────────┤
+└ Footer (Esc stop · ^N new session) ─────────────────────────────┘
 ```
 
 ## Module map
@@ -33,7 +35,14 @@ both are thin *hosts* over the same assembly point
 - `widgets.py` — `ChatLog`: per-message `Static`s (all `markup=False` — chat
   text is full of literal `[...]` brackets) plus a mutable streaming tail;
   deltas accumulate in string buffers and a ~20 Hz timer flushes what changed,
-  so token-rate updates never thrash layout.
+  so token-rate updates never thrash layout. `ToolActivity`: one row per
+  *orchestrator* tool call (`→ name: preview` → `✓/✗ name (latency)`).
+  `ForgePanel`: reveals on a `forge_tool` pre-execute; renders the
+  `ON_FORGE_PHASE` narration as a bold status line with an elapsed clock
+  (1 s tick), and streams the worker's own tool calls
+  (`component == "forge_worker"`) into a feed — those never appear in
+  `ToolActivity`. The panel keeps its final state (✓ candidate ready /
+  ✗ build failed) after the call ends.
 - `messages.py` — the typed message vocabulary (`ThinkingDelta`, `TextDelta`,
   `TurnFinished`, `ToolStarted`, `ToolFinished`, `ForgePhase`). Every signal
   from the agent side crosses into the UI as one of these.

@@ -9,8 +9,11 @@ from __future__ import annotations
 from tests.orchestrator._harness import assistant_text, assistant_tool_use
 
 from toolforge.config import SandboxSettings
+from toolforge.orchestrator.hooks import HookEvent
 from toolforge.providers import PermanentProviderError
 from toolforge.tui.app import ToolforgeApp
+from textual.widgets import Static
+
 from toolforge.tui.widgets import ChatLog
 
 from tests.tui._harness import chat_texts, make_stub_host
@@ -139,3 +142,110 @@ async def test_chatlog_is_composed(sandbox_settings: SandboxSettings) -> None:
     app = ToolforgeApp(make_stub_host(sandbox_settings, []))
     async with app.run_test():
         assert isinstance(app.query_one("#chat"), ChatLog)
+
+
+# ── tool activity + forge panel ──────────────────────────────────────────────
+
+
+async def test_tool_activity_shows_orchestrator_calls(
+    sandbox_settings: SandboxSettings,
+) -> None:
+    host = make_stub_host(
+        sandbox_settings,
+        [assistant_tool_use(("tu_1", "echo", {"text": "ping"})), assistant_text("done")],
+    )
+    app = ToolforgeApp(host)
+    async with app.run_test() as pilot:
+        await app.workers.wait_for_complete()
+        await app.handle_submit("use the tool")
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        rows = [str(w.content) for w in app.activity.query(".tool-row").results(Static)]
+        assert len(rows) == 1
+        assert "echo" in rows[0]
+        assert "✓" in rows[0]
+
+
+async def test_forge_panel_reveals_narrates_and_finishes(
+    sandbox_settings: SandboxSettings,
+) -> None:
+    host = make_stub_host(sandbox_settings, [])
+    app = ToolforgeApp(host)
+    async with app.run_test() as pilot:
+        await app.workers.wait_for_complete()
+        assert app.forge_panel.has_class("hidden")
+
+        fire = host.hooks.fire
+        await fire(
+            HookEvent.ON_TOOL_PRE_EXECUTE,
+            tool_name="forge_tool",
+            call_id="f1",
+            input={"name": "fetch_rss"},
+            component="orchestrator",
+        )
+        await fire(HookEvent.ON_FORGE_PHASE, tool="fetch_rss", phase="authoring_tests")
+        await fire(HookEvent.ON_FORGE_PHASE, tool="fetch_rss", phase="tests_ready", test_count=7)
+        await fire(
+            HookEvent.ON_FORGE_PHASE,
+            tool="fetch_rss",
+            phase="attempt",
+            attempt=1,
+            max_attempts=4,
+        )
+        await fire(
+            HookEvent.ON_TOOL_PRE_EXECUTE,
+            tool_name="run_tests",
+            call_id="w1",
+            input={},
+            component="forge_worker",
+        )
+        await pilot.pause()
+
+        panel = app.forge_panel
+        assert not panel.has_class("hidden")
+        assert "attempt 1/4" in panel.status_text
+        feed = [str(w.content) for w in panel.query(".feed-row").results(Static)]
+        assert any("run_tests" in t for t in feed)
+        # the worker's inner calls never pollute the orchestrator activity list
+        rows = [str(w.content) for w in app.activity.query(".tool-row").results(Static)]
+        assert not any("run_tests" in t for t in rows)
+
+        await fire(HookEvent.ON_FORGE_PHASE, tool="fetch_rss", phase="candidate_ready", attempts=2)
+        await fire(
+            HookEvent.ON_TOOL_POST_EXECUTE,
+            tool_name="forge_tool",
+            call_id="f1",
+            is_error=False,
+            latency_ms=120000,
+            component="orchestrator",
+        )
+        await pilot.pause()
+        assert "candidate ready" in panel.status_text
+        rows = [str(w.content) for w in app.activity.query(".tool-row").results(Static)]
+        assert any("forge_tool" in t and "✓" in t for t in rows)
+
+
+async def test_forge_failure_marks_panel(sandbox_settings: SandboxSettings) -> None:
+    host = make_stub_host(sandbox_settings, [])
+    app = ToolforgeApp(host)
+    async with app.run_test() as pilot:
+        await app.workers.wait_for_complete()
+        fire = host.hooks.fire
+        await fire(
+            HookEvent.ON_TOOL_PRE_EXECUTE,
+            tool_name="forge_tool",
+            call_id="f2",
+            input={},
+            component="orchestrator",
+        )
+        await fire(HookEvent.ON_FORGE_PHASE, tool="slugify", phase="failed")
+        await fire(
+            HookEvent.ON_TOOL_POST_EXECUTE,
+            tool_name="forge_tool",
+            call_id="f2",
+            is_error=True,
+            latency_ms=1,
+            component="orchestrator",
+        )
+        await pilot.pause()
+        assert "✗" in app.forge_panel.status_text

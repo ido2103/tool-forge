@@ -1,6 +1,57 @@
-#chat {
+#body {
     height: 1fr;
+}
+
+#chat {
+    width: 2fr;
     padding: 0 1;
+}
+
+#side {
+    width: 1fr;
+    max-width: 48;
+    border-left: solid $panel;
+    padding: 0 1;
+}
+
+#activity {
+    height: 1fr;
+}
+
+#forge {
+    height: 1fr;
+    border-top: solid $panel;
+    padding: 0;
+}
+
+#forge.hidden {
+    display: none;
+}
+
+#forge-status {
+    text-style: bold;
+    color: $warning;
+    padding: 0 0 1 0;
+}
+
+#forge-feed {
+    height: 1fr;
+}
+
+.feed-row {
+    color: $text-muted;
+}
+
+.tool-row {
+    color: $text-muted;
+}
+
+.tool-row.running {
+    color: $accent;
+}
+
+.tool-row.error {
+    color: $text-error;
 }
 
 .msg {

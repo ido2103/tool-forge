@@ -19,6 +19,7 @@ import sys
 from pydantic import ValidationError
 from textual.app import App, ComposeResult
 from textual.binding import Binding
+from textual.containers import Horizontal, Vertical
 from textual.widgets import Footer, Header, Input
 
 from toolforge.config import (
@@ -31,8 +32,15 @@ from toolforge.config import (
 from toolforge.orchestrator.bootstrap import Host, build_host
 from toolforge.providers import Message
 from toolforge.tui.bridge import attach_hooks, make_delta_callbacks
-from toolforge.tui.messages import TextDelta, ThinkingDelta, TurnFinished
-from toolforge.tui.widgets import ChatLog
+from toolforge.tui.messages import (
+    ForgePhase,
+    TextDelta,
+    ThinkingDelta,
+    ToolFinished,
+    ToolStarted,
+    TurnFinished,
+)
+from toolforge.tui.widgets import ChatLog, ForgePanel, ToolActivity
 
 
 class ToolforgeApp(App[None]):
@@ -56,7 +64,11 @@ class ToolforgeApp(App[None]):
 
     def compose(self) -> ComposeResult:
         yield Header()
-        yield ChatLog(id="chat")
+        with Horizontal(id="body"):
+            yield ChatLog(id="chat")
+            with Vertical(id="side"):
+                yield ToolActivity(id="activity")
+                yield ForgePanel(id="forge", classes="hidden")
         yield Input(placeholder="type a task — /new /reset /quit · Esc stops a turn", id="prompt")
         yield Footer()
 
@@ -67,6 +79,14 @@ class ToolforgeApp(App[None]):
     @property
     def prompt(self) -> Input:
         return self.query_one("#prompt", Input)
+
+    @property
+    def activity(self) -> ToolActivity:
+        return self.query_one("#activity", ToolActivity)
+
+    @property
+    def forge_panel(self) -> ForgePanel:
+        return self.query_one("#forge", ForgePanel)
 
     @property
     def turn_running(self) -> bool:
@@ -189,6 +209,27 @@ class ToolforgeApp(App[None]):
         self._turn_running = False
         self.prompt.disabled = False
         self.prompt.focus()
+
+    # ── tool activity + forge narration ─────────────────────────────────────
+
+    def on_tool_started(self, message: ToolStarted) -> None:
+        if message.component == "forge_worker":
+            label = f"→ {message.tool_name}" + (f": {message.preview}" if message.preview else "")
+            self.forge_panel.add_worker_event(label)
+            return
+        self.activity.start_call(message.call_id, message.tool_name, message.preview)
+        if message.tool_name == "forge_tool":
+            self.forge_panel.begin(message.call_id)
+
+    def on_tool_finished(self, message: ToolFinished) -> None:
+        if message.component == "forge_worker":
+            return
+        self.activity.finish_call(message.call_id, message.is_error, message.latency_ms)
+        if message.tool_name == "forge_tool":
+            self.forge_panel.finish(message.call_id, message.is_error)
+
+    def on_forge_phase(self, message: ForgePhase) -> None:
+        self.forge_panel.set_phase(message.tool, message.phase, message.extra)
 
     # ── actions ─────────────────────────────────────────────────────────────
 

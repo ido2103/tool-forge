@@ -1,14 +1,18 @@
-"""Chat-log widget: styled per-message statics with a buffered streaming tail.
+"""TUI widgets: the chat log, the tool-activity sidebar, and the forge panel.
 
-Token deltas arrive far faster than a layout pass is worth; the log accumulates
-them in plain-string buffers and a ~20 Hz timer flushes whatever changed. One
-mutable "tail" pair (thinking + answer) exists only while a turn streams; on
-turn end it is frozen into ordinary message widgets.
+ChatLog buffers token deltas in plain strings and flushes on a ~20 Hz timer —
+deltas arrive far faster than a layout pass is worth. ToolActivity shows one
+row per orchestrator tool call. ForgePanel is the build's live narration: a
+forge occupies the sandbox for minutes, and this panel (phase line + elapsed
+clock + the worker's own tool calls) is what makes that time legible.
 """
 
 from __future__ import annotations
 
-from textual.containers import VerticalScroll
+import time
+
+from textual.app import ComposeResult
+from textual.containers import Vertical, VerticalScroll
 from textual.widgets import Static
 
 _FLUSH_INTERVAL = 0.05
@@ -89,3 +93,116 @@ class ChatLog(VerticalScroll):
         if self._tail_answer is not None:
             self._tail_answer.update(self._answer_buf)
         self.scroll_end(animate=False)
+
+
+class ToolActivity(VerticalScroll):
+    """One row per orchestrator tool call: `→ name: preview`, then ✓/✗ + latency."""
+
+    def __init__(self, *, id: str | None = None) -> None:  # noqa: A002 - Textual's kwarg name
+        super().__init__(id=id)
+        self._rows: dict[str, tuple[Static, str]] = {}
+
+    def start_call(self, call_id: str, tool_name: str, preview: str) -> None:
+        label = f"→ {tool_name}" + (f": {preview}" if preview else "")
+        row = Static(label, classes="tool-row running", markup=False)
+        self._rows[call_id] = (row, label)
+        self.mount(row)
+        self.scroll_end(animate=False)
+
+    def finish_call(self, call_id: str, is_error: bool, latency_ms: int) -> None:
+        entry = self._rows.pop(call_id, None)
+        if entry is None:
+            return
+        row, label = entry
+        mark = "✗" if is_error else "✓"
+        row.update(f"{mark} {label[2:]} ({latency_ms}ms)")
+        row.remove_class("running")
+        row.add_class("error" if is_error else "done")
+
+
+_PHASE_TEXT = {
+    "authoring_tests": "authoring adversarial tests…",
+    "building": "worker starting…",
+    "verifying": "verifying in a fresh container…",
+    "candidate_ready": "✓ candidate ready",
+    "failed": "✗ build failed",
+}
+
+
+class ForgePanel(Vertical):
+    """Live narration of one forge build; hidden until a forge_tool call starts."""
+
+    def __init__(
+        self,
+        *,
+        id: str | None = None,  # noqa: A002 - Textual's own kwarg name
+        classes: str | None = None,
+    ) -> None:
+        super().__init__(id=id, classes=classes)
+        self._active_call: str | None = None
+        self._tool = ""
+        self._phase_text = ""
+        self._started = 0.0
+        self._finished = False
+
+    def compose(self) -> ComposeResult:
+        yield Static("", id="forge-status", markup=False)
+        yield VerticalScroll(id="forge-feed")
+
+    def on_mount(self) -> None:
+        self.set_interval(1.0, self._tick)
+
+    @property
+    def status_text(self) -> str:
+        return str(self.query_one("#forge-status", Static).content)
+
+    def begin(self, call_id: str) -> None:
+        self._active_call = call_id
+        self._tool = ""
+        self._phase_text = "starting…"
+        self._started = time.monotonic()
+        self._finished = False
+        self.query_one("#forge-feed", VerticalScroll).remove_children()
+        self.remove_class("hidden")
+        self._render_status()
+
+    def set_phase(self, tool: str, phase: str, extra: dict[str, object]) -> None:
+        self._tool = tool
+        if phase == "tests_ready":
+            self._phase_text = f"{extra.get('test_count')} adversarial tests ready (red)"
+        elif phase == "attempt":
+            self._phase_text = f"worker attempt {extra.get('attempt')}/{extra.get('max_attempts')}"
+        elif phase == "attempt_failed":
+            tampered = extra.get("tampered") or []
+            note = " — tampering detected!" if tampered else ""
+            self._phase_text = f"attempt failed{note}"
+        elif phase == "candidate_ready":
+            self._phase_text = f"✓ candidate ready ({extra.get('attempts')} attempt(s))"
+        else:
+            self._phase_text = _PHASE_TEXT.get(phase, phase)
+        self._render_status()
+
+    def add_worker_event(self, text: str) -> None:
+        feed = self.query_one("#forge-feed", VerticalScroll)
+        feed.mount(Static(text, classes="feed-row", markup=False))
+        feed.scroll_end(animate=False)
+
+    def finish(self, call_id: str, is_error: bool) -> None:
+        if call_id != self._active_call:
+            return
+        self._active_call = None
+        self._finished = True
+        if is_error and not self._phase_text.startswith("✗"):
+            self._phase_text = "✗ build failed"
+        self._render_status()
+
+    def _tick(self) -> None:
+        if self._active_call is not None:
+            self._render_status()
+
+    def _render_status(self) -> None:
+        elapsed = int(time.monotonic() - self._started) if self._started else 0
+        clock = f"{elapsed // 60}:{elapsed % 60:02d}"
+        name = f"forge[{self._tool}]" if self._tool else "forge"
+        suffix = "" if self._finished else f" · {clock}"
+        self.query_one("#forge-status", Static).update(f"{name}: {self._phase_text}{suffix}")
