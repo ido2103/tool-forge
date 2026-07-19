@@ -50,8 +50,9 @@ def make_stub_host(
     sandbox_script: list[tuple[int | None, bytes] | BaseException] | None = None,
     loaded_tools: list[str] | None = None,
     tool_store_warnings: list[str] | None = None,
+    client: FakeProviderClient | None = None,
 ) -> Host:
-    client = StreamingFakeClient(script)
+    client = client if client is not None else StreamingFakeClient(script)
     sandbox = BashSandbox(sandbox_settings, runner=FakeRunner(sandbox_script or [(0, b"started")]))
     hooks = HookManager()
     registry = ToolRegistry(ToolContext())

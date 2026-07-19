@@ -45,6 +45,11 @@ from toolforge.tui.messages import (
 from toolforge.tui.widgets import ChatLog, ForgePanel, ToolActivity
 
 
+# Bounded grace on quit-during-turn: up to 3 s (30 × 0.1 s) for the loop's
+# cancel path to finish the turn before the app exits anyway.
+_QUIT_GRACE_TICKS = 30
+
+
 class ToolforgeApp(App[None]):
     """Chat pane + prompt over one `Host`; later slices add sidebar and modal."""
 
@@ -53,6 +58,7 @@ class ToolforgeApp(App[None]):
     BINDINGS = [
         Binding("escape", "stop_turn", "Stop turn"),
         Binding("ctrl+n", "new_session", "New session"),
+        Binding("ctrl+q", "quit", "Quit"),
     ]
 
     def __init__(self, host: Host) -> None:
@@ -132,7 +138,7 @@ class ToolforgeApp(App[None]):
     async def handle_submit(self, text: str) -> None:
         """Dispatch one line of user input: slash command or a task turn."""
         if text in ("/quit", "/exit"):
-            self.exit()
+            await self.action_quit()
             return
         if text.startswith("/") and self._turn_running:
             self.chat.add_system("(a turn is running — Esc to stop it first)")
@@ -266,6 +272,27 @@ class ToolforgeApp(App[None]):
             return
         self._history.clear()
         self.chat.add_system("(history cleared)")
+
+    async def action_quit(self) -> None:
+        """Quit, but let an in-flight turn stop cleanly first.
+
+        A hard exit would cancel the turn worker mid-send and leave history
+        dangling; request_stop lets the loop synthesize its "Stopping." finish.
+        The wait runs in a worker — awaiting here would block the message pump
+        that delivers the very TurnFinished it waits for — and it is bounded:
+        a wedged turn never traps the user in the app.
+        """
+        self.run_worker(self._graceful_quit(), group="quit", exclusive=True)
+
+    async def _graceful_quit(self) -> None:
+        if self._turn_running:
+            self._host.orchestrator.request_stop()
+            self.chat.add_system("(stopping the turn, then quitting…)")
+            for _ in range(_QUIT_GRACE_TICKS):
+                if not self._turn_running:
+                    break
+                await asyncio.sleep(0.1)
+        self.exit()
 
 
 class AskUserProxy:

@@ -6,6 +6,7 @@ is manual (`uv run toolforge-tui`).
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from tests.orchestrator._harness import assistant_text, assistant_tool_use
@@ -20,7 +21,12 @@ from textual.widgets import Input, Static
 
 from toolforge.tui.widgets import ChatLog
 
-from tests.tui._harness import chat_texts, make_stub_host, tool_result_text
+from tests.tui._harness import (
+    StreamingFakeClient,
+    chat_texts,
+    make_stub_host,
+    tool_result_text,
+)
 
 
 async def test_boot_enables_input_and_shows_findings(sandbox_settings: SandboxSettings) -> None:
@@ -353,3 +359,37 @@ async def test_stop_during_question_dismisses_modal(
         # the aborted question surfaces as an [ABORTED] tool result, never an answer
         tool_results = tool_result_text(app._history[2])
         assert "ABORTED" in tool_results
+
+
+# ── quit during a turn ───────────────────────────────────────────────────────
+
+
+class _HangingClient(StreamingFakeClient):
+    """send() hangs until the loop's cancel event fires, then aborts."""
+
+    async def send(self, **kwargs: Any) -> Any:
+        cancel = kwargs.get("cancel_event")
+        assert cancel is not None
+        await cancel.wait()
+        raise asyncio.CancelledError
+
+
+async def test_quit_during_turn_finishes_it_cleanly(
+    sandbox_settings: SandboxSettings,
+) -> None:
+    host = make_stub_host(sandbox_settings, [], client=_HangingClient([]))
+    app = ToolforgeApp(host)
+    async with app.run_test() as pilot:
+        await app.workers.wait_for_complete()
+        await app.handle_submit("hang forever")
+        await pilot.pause()
+        assert app.turn_running
+        await app.action_quit()
+        for _ in range(100):
+            if not app.turn_running:
+                break
+            await pilot.pause()
+        # the loop's cancel path finished the turn: history is consistent,
+        # ending with the synthesized "Stopping." assistant message.
+        assert app._history[-1].role == "assistant"
+        assert app._history[-1].stop_reason == "interrupted"

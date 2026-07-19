@@ -92,8 +92,11 @@ Textual owns the asyncio loop; nothing runs on threads.
 
 `/new` (clear history) · `/reset` (also drop candidates + recycle the
 container) · `/quit` `/exit` · unknown `/x` gets a hint. `Esc` stops the
-running turn; `^N` = `/new`. Commands other than quit are rejected while a turn
-runs. Sandbox teardown stays on the `atexit` hook registered by `build_host`.
+running turn; `^N` = `/new`; `^Q` quits. Commands other than quit are rejected
+while a turn runs. **Quit during a turn** is graceful: `request_stop`, then a
+bounded (~3 s) wait in a worker for the loop's "Stopping." finish before
+`exit()` — a wedged turn never traps the user. Sandbox teardown stays on the
+`atexit` hook registered by `build_host`.
 
 ## Testing
 
