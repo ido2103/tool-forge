@@ -1,6 +1,9 @@
 # Providers
 
 **Status: implemented** (initial port from Zeemon's provider layer).
+`OpenAICompatClient` is now consumed by the forge worker's **local** backend;
+in the default **api** backend the worker shares the orchestrator's
+`AnthropicClient` with a cheaper per-send model.
 
 The single model-I/O layer under the orchestrator and the forge. Everything that
 talks to a model API lives here; the agent loops above it only ever see the

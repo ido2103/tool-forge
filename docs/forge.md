@@ -1,16 +1,17 @@
 # Forge
 
-**Status: `register_tool`, the adversarial test author, and the forge worker
-loop implemented. `forge_tool` remains stubbed pending the final wiring that
-connects the two stages into its handler (next commit).**
+**Status: fully implemented — `forge_tool` builds candidates through the test
+author + forge worker pipeline; `register_tool` promotes them.**
 
 Turns a tool spec from the orchestrator into a verified, registered tool. Exposed to the
 orchestrator as **two composable tools** (`src/toolforge/forge/tools.py`): `forge_tool`
-builds a *candidate*, and `register_tool` promotes it after the orchestrator's own
-holdout check. Both are wired into the REPL registry; `forge_tool` fully validates its
-input and returns a guided not-implemented error — the build loop is the next slice.
-`register_tool` is real: a candidate whose files exist in the workspace is promoted,
-persisted, and callable on the next turn.
+builds a *candidate* — validate the spec → test author writes a verified-red suite →
+the worker implements to a harness-verified green — and `register_tool` promotes it
+after the orchestrator's own holdout check. Both are wired into the REPL registry.
+`forge_tool` carries the sandbox serial group: a build occupies the shared container
+for minutes, so batched sibling sandbox calls queue behind it. Stage failures come
+back as guided errors: a test-author failure points at the spec (build dir removed);
+worker exhaustion carries the failure log and leaves the artifacts in the workspace.
 
 ## Orchestrator interface
 

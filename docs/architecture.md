@@ -95,28 +95,34 @@ Runtime configuration comes from `.env` via `src/toolforge/config.py`
   network, output caps, serialized via the `"sandbox"` group), plus the read-only
   `/tools` mount hosting the forged-tool store. The spec's generated-code isolation
   (no-network-default, domain allowlists, credential logging) is future work.
-- **forge** — `register_tool` implemented: promotes a verified candidate into the
+- **forge** — fully implemented end-to-end. `forge_tool` runs the whole build
+  pipeline: the **adversarial test author** (frontier-tier; validated all-red
+  pytest suite via collect + stub-run gates) followed by the **forge worker**
+  (a different, cheaper model driving the orchestrator's own loop class over a
+  private `run_bash`/`write_tool_code`/`run_tests` registry) to a
+  harness-verified green — the pristine-suite verification defeats
+  test-tampering, and budgets are config-bounded with escalation on
+  exhaustion. `register_tool` promotes a verified candidate into the
   persistent tool store (`./tools`, read-only in the container) and the live
   registry, executing via a harness-owned runner in the sandbox; the store is
-  rescanned at boot, so the toolbox survives restarts. The **adversarial test
-  author** is implemented: a frontier-tier call that turns a spec into a
-  validated, all-red pytest suite in the workspace (collect + stub-run gates,
-  bounded fix-in-context retries, wall-clock budget). `forge_tool` (spec →
-  candidate) still validates input and returns a guided not-implemented error;
-  the forge worker loop that consumes the authored suite is the next slice. See
-  [forge.md](forge.md).
+  rescanned at boot, so the toolbox survives restarts. See [forge.md](forge.md).
 
-**How it wires together today:** the REPL builds an `AnthropicClient`, a `BashSandbox`
-+ `ToolRegistry` (with `run_bash`, `ask_user` bound to a stdin prompt callback, and
-`forge_tool` + `register_tool` bound to a shared
-`CandidateStore` and the live registry), installs the forged-tool runner and reloads
-every persisted tool from the `./tools` store (skipping corrupt entries with a
-warning), builds a `HookManager` and a `Transcript`, starts the sandbox container
-eagerly (failing loudly at boot if Docker is down), then hands them to the
+**How it wires together today:** the REPL loads settings, runs the boot-time
+cross-model check (`validate_worker_separation`: worker ≠ orchestrator/test
+author), and builds an `AnthropicClient` plus the worker client (api mode
+reuses the Anthropic client with the cheaper worker model; local mode gets an
+`OpenAICompatClient`), a `BashSandbox` + `ToolRegistry` (with `run_bash`,
+`ask_user` bound to a stdin prompt callback, and `forge_tool` — carrying a
+`TestAuthor` and a `ForgeWorker` — + `register_tool` bound to a shared
+`CandidateStore` and the live registry), installs the forged-tool runner and
+reloads every persisted tool from the `./tools` store (skipping corrupt
+entries with a warning), builds a `HookManager` (shared with the worker, so
+builds narrate live) and a `Transcript` (worker builds mirror to their own
+`runs/forge-<name>-<ts>.jsonl`), starts the sandbox container eagerly
+(failing loudly at boot if Docker is down), then hands them to the
 `Orchestrator`. Each turn the loop re-reads the registry's schemas, calls the
-provider, and dispatches tool calls into the sandbox; `/reset` also drops unpromoted
-candidates. This is the spine the forge's build loop, wall detector, skills, and evals
+provider, and dispatches tool calls into the sandbox; `/reset` also drops
+unpromoted candidates. This is the spine the wall detector, skills, and evals
 will hang off.
 
-**Skeleton only:** skills, evals; the forge's worker loop (the test author half is
-implemented). Update this section as subsystems land.
+**Skeleton only:** skills, evals. Update this section as subsystems land.
