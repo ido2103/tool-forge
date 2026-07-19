@@ -54,7 +54,16 @@ class AnthropicSettings(BaseSettings):
 
 
 class WorkerSettings(BaseSettings):
-    """Forge-worker model access (OpenAI-compatible server: vLLM / llama.cpp)."""
+    """Forge-worker backend selection, model access, and build-loop budgets.
+
+    Two first-class backends: ``api`` (default; a cheaper Anthropic model
+    reusing the orchestrator's credentials — the model is a per-send argument
+    on the client, so no second auth path) and ``local`` (any OpenAI-compatible
+    server: vLLM / llama.cpp / LM Studio). The cross-model invariant (worker ≠
+    orchestrator / test author) is checked at boot by
+    :func:`validate_worker_separation`, not here — this class cannot see the
+    other settings.
+    """
 
     model_config = SettingsConfigDict(
         env_prefix="TOOLFORGE_WORKER_",
@@ -63,16 +72,39 @@ class WorkerSettings(BaseSettings):
         populate_by_name=True,
     )
 
+    backend: Literal["api", "local"] = "api"
+    api_model: str = "claude-haiku-4-5"
+    # local mode: OpenAI-compatible server.
     host: str = "127.0.0.1"
     port: int = 8000
     model: str = "Qwen/Qwen3.6-27B"
     # vLLM convention: server without --api-key accepts any value, but the
     # OpenAI SDK requires a non-empty key.
     api_key: SecretStr = SecretStr("EMPTY")
+    # Build-loop budgets — bounded in code, never tool parameters (a failed
+    # forge is answered with a better spec, not a bigger budget).
+    max_attempts: int = 4  # authoritative harness verifications per build
+    max_iterations: int = 15  # tool-call iterations per worker attempt
+    max_tokens: int = 8_000  # output-token cap per worker model call
+    # Wall-clock ceiling for one build() call, checked before every worker run
+    # and verification; overshoot is bounded by the longest single step.
+    timeout_seconds: int = 1800
 
     @property
     def base_url(self) -> str:
         return f"http://{self.host}:{self.port}/v1"
+
+    @property
+    def effective_model(self) -> str:
+        """The model the worker actually runs, per the selected backend."""
+        return self.api_model if self.backend == "api" else self.model
+
+    @field_validator("max_attempts", "max_iterations", "max_tokens", "timeout_seconds")
+    @classmethod
+    def _positive(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("must be > 0")
+        return v
 
 
 class TestAuthorSettings(BaseSettings):
@@ -181,3 +213,30 @@ class SandboxSettings(BaseSettings):
     @classmethod
     def _absolute(cls, v: Path) -> Path:
         return v.expanduser().resolve()
+
+
+def validate_worker_separation(
+    worker: WorkerSettings,
+    anthropic: AnthropicSettings,
+    test_author: TestAuthorSettings,
+) -> None:
+    """Enforce the cross-model invariant at boot: worker ≠ orchestrator/test author.
+
+    Cross-model separation mitigates the self-verification trap — the model
+    that implements a tool must never be the one that wrote its tests or the
+    one that judges the result. Raises ``ValueError`` so a misconfigured boot
+    fails loudly before any task runs.
+    """
+    worker_model = worker.effective_model
+    author_model = test_author.model or anthropic.model
+    if worker_model == anthropic.model:
+        raise ValueError(
+            f"worker model {worker_model!r} equals the orchestrator model; the forge "
+            "worker must be a different model (set TOOLFORGE_WORKER_API_MODEL / "
+            "TOOLFORGE_WORKER_MODEL or change the orchestrator model)"
+        )
+    if worker_model == author_model:
+        raise ValueError(
+            f"worker model {worker_model!r} equals the test-author model; the model "
+            "that implements a tool must not be the one that wrote its tests"
+        )

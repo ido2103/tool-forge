@@ -14,10 +14,10 @@ installed by ``runtime.install_runner``) inside the sandbox container.
 Internal loop: the **test author** (``test_author.py``, implemented) has a
 frontier-tier model write adversarial tests from the spec alone (TDD, before
 any implementation) and only accepts a suite that is collected and all-red
-against a stub; then the forge worker (future slice: api or local backend,
-never the orchestrator's model) implements against them in a harness until
-green, with a docs-RAG tool for real API documentation and a bounded iteration
-budget that escalates failures back to the orchestrator.
+against a stub; then the **forge worker** (``worker.py``, implemented; api or
+local backend, never the orchestrator's model) implements against them as an
+agentic mini-loop under a config-bounded budget, verified green only by the
+harness's pristine-suite run, escalating failures back to the orchestrator.
 """
 
 from toolforge.forge.candidates import Candidate, CandidateStore, ToolSpec
@@ -26,14 +26,18 @@ from toolforge.forge.promote import PromotionError, load_persisted_tools, promot
 from toolforge.forge.runtime import build_forged_tool, install_runner
 from toolforge.forge.test_author import AuthoredTests, TestAuthor, TestAuthorError
 from toolforge.forge.tools import build_forge_tool, build_register_tool
+from toolforge.forge.worker import BuildResult, ForgeWorker, WorkerError
 
 __all__ = [
     "AuthoredTests",
+    "BuildResult",
     "Candidate",
     "CandidateStore",
+    "ForgeWorker",
     "TestAuthor",
     "TestAuthorError",
     "ToolSpec",
+    "WorkerError",
     "Manifest",
     "ManifestError",
     "PromotionError",

@@ -8,11 +8,13 @@ enforces the spec's rule that green tests alone never register a tool — the
 forge grades its own homework, so an independent verification must happen in
 between.
 
-``register_tool`` is fully implemented: it promotes the candidate's artifacts
-into the read-only tool store on disk (see ``promote.py``) and registers a live
-sandbox-executing tool (see ``runtime.py``). ``forge_tool`` validates its input
-and returns a guided not-implemented error: the internal build loop (test
-author + worker) is a future slice.
+Both are fully implemented. ``forge_tool`` runs the build pipeline: validate
+the spec → the test author writes a verified-red suite (``test_author.py``) →
+the forge worker implements against it to a harness-verified green
+(``worker.py``) → the candidate lands in the store with its code, test report,
+and workspace paths. ``register_tool`` promotes a candidate's artifacts into
+the read-only tool store on disk (see ``promote.py``) and registers a live
+sandbox-executing tool (see ``runtime.py``).
 """
 
 from __future__ import annotations
@@ -20,12 +22,15 @@ from __future__ import annotations
 from typing import Any
 
 from toolforge.config import SandboxSettings
-from toolforge.forge.candidates import CandidateStore
+from toolforge.forge.candidates import Candidate, CandidateStore, ToolSpec
 from toolforge.forge.manifest import NAME_RE, validate_input_schema
 from toolforge.forge.promote import PromotionError, promote_candidate
 from toolforge.forge.runtime import build_forged_tool
+from toolforge.forge.test_author import AuthoredTests, TestAuthor, TestAuthorError
+from toolforge.forge.worker import BuildResult, ForgeWorker, WorkerError
 from toolforge.registry import RegisteredTool, ToolContext, ToolRegistry, ToolResult
-from toolforge.sandbox import BashSandbox
+from toolforge.sandbox import BashSandbox, truncate_output
+from toolforge.sandbox.run_bash import SANDBOX_SERIAL_GROUP
 
 _NAME_RE = NAME_RE
 
@@ -184,12 +189,31 @@ _REGISTER_INPUT_SCHEMA: dict[str, Any] = {
     "required": ["holdout_evidence", "name"],
 }
 
-_FORGE_NOT_IMPLEMENTED = (
-    "[forge_tool error: the forge is not yet implemented — your spec was valid but no "
-    "tool was built and no candidate was created. Do NOT retry this call; it will fail "
-    "identically. Proceed with your existing tools (compose run_bash where possible), "
-    "or report to the user that this task needs a capability that cannot be forged yet.]"
-)
+# The whole success payload (code + report + guidance) stays well under this;
+# the cap is a defensive bound against a pathologically large tool.py.
+_SUCCESS_CAP = 16_000
+
+
+def _render_success(spec: ToolSpec, tests: AuthoredTests, built: BuildResult) -> str:
+    body = (
+        f"[forge_tool: candidate {spec.name!r} built — {tests.test_count} tests green "
+        f"after {built.attempts} worker attempt(s)]\n"
+        f"Files (sandbox paths): code {built.code_path} · tests {built.test_path}\n"
+        "\n"
+        "Harness-verified test run (pristine suite):\n"
+        f"{built.test_report.rstrip()}\n"
+        "\n"
+        "tool.py:\n"
+        "```python\n"
+        f"{built.code.rstrip()}\n"
+        "```\n"
+        "\n"
+        "This candidate is NOT registered. Verify it yourself against unseen inputs "
+        "via run_bash and/or review it against your behavior contract, then call "
+        "register_tool with that evidence."
+    )
+    capped, _ = truncate_output(body, _SUCCESS_CAP)
+    return capped
 
 
 def _error(message: str) -> ToolResult:
@@ -200,10 +224,19 @@ def _blank(value: Any) -> bool:
     return not isinstance(value, str) or not value.strip()
 
 
-def build_forge_tool(store: CandidateStore, registry: ToolRegistry) -> RegisteredTool:
-    """Build ``forge_tool`` bound to *store* and the live *registry*.
+def build_forge_tool(
+    store: CandidateStore,
+    registry: ToolRegistry,
+    *,
+    test_author: TestAuthor,
+    worker: ForgeWorker,
+) -> RegisteredTool:
+    """Build ``forge_tool`` bound to *store*, the live *registry*, and the build stages.
 
     TRUSTED: its output is harness-generated text, never external content.
+    Carries ``SANDBOX_SERIAL_GROUP``: a build occupies the shared container for
+    minutes, so batched sibling sandbox calls must queue behind it, not
+    interleave with the worker's commands.
     """
 
     async def handler(inp: dict[str, Any], ctx: ToolContext) -> ToolResult:
@@ -257,9 +290,46 @@ def build_forge_tool(store: CandidateStore, registry: ToolRegistry) -> Registere
                     '{"input": {...}, "output": "..."} objects]'
                 )
 
-        # Spec is valid; the internal build loop is a future slice. No Candidate
-        # is stored — one exists only after a successful build.
-        return _error(_FORGE_NOT_IMPLEMENTED)
+        spec = ToolSpec.from_validated_input(inp)
+
+        try:
+            tests = await test_author.author_tests(spec)
+        except TestAuthorError as exc:
+            return _error(
+                f"[forge_tool error: test authoring failed — {exc}. No candidate was "
+                "created and the build directory was removed. Revise the spec (a "
+                "sharper behavior contract and concrete examples usually fix this) "
+                "and re-forge, or fall back to existing tools.]"
+            )
+
+        try:
+            built = await worker.build(spec, tests)
+        except WorkerError as exc:
+            return _error(
+                "[forge_tool error: the worker could not make the test suite pass "
+                f"within its budget. No candidate was created. {exc}\n"
+                f"The tests and last tool.py remain at /workspace/build/{spec.name}/ "
+                "for inspection via run_bash — they are NOT a candidate. Most budget "
+                "exhaustions mean an ambiguous or over-broad behavior contract: "
+                "revise the spec and re-forge, narrow the tool, or fall back to "
+                "existing tools.]"
+            )
+
+        store.put(
+            Candidate(
+                name=spec.name,
+                description=spec.description,
+                input_schema=spec.input_schema,
+                behavior=spec.behavior,
+                gap_analysis=inp["gap_analysis"],
+                allowed_domains=list(spec.allowed_domains),
+                examples=list(spec.examples),
+                code_path=built.code_path,
+                test_path=built.test_path,
+                test_report=built.test_report,
+            )
+        )
+        return ToolResult(tool_use_id="", content=_render_success(spec, tests, built))
 
     return RegisteredTool(
         name="forge_tool",
@@ -267,6 +337,7 @@ def build_forge_tool(store: CandidateStore, registry: ToolRegistry) -> Registere
         input_schema=_FORGE_INPUT_SCHEMA,
         handler=handler,
         trust="TRUSTED",
+        serial_group=SANDBOX_SERIAL_GROUP,
     )
 
 

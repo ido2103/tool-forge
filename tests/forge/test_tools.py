@@ -1,4 +1,4 @@
-"""forge_tool / register_tool tests — schemas, validation, promotion, stub errors."""
+"""forge_tool / register_tool tests — schemas, validation, pipeline, promotion."""
 
 from __future__ import annotations
 
@@ -7,25 +7,90 @@ from typing import Any
 import pytest
 
 from toolforge.config import SandboxSettings
-from toolforge.forge import Candidate, CandidateStore, build_forge_tool, build_register_tool
+from toolforge.forge import (
+    AuthoredTests,
+    BuildResult,
+    Candidate,
+    CandidateStore,
+    ForgeWorker,
+    TestAuthor,
+    TestAuthorError,
+    ToolSpec,
+    WorkerError,
+    build_forge_tool,
+    build_register_tool,
+)
 from toolforge.forge.manifest import load_manifest
 from toolforge.registry import RegisteredTool, ToolContext, ToolRegistry, ToolResult
 from toolforge.sandbox.bash import BashSandbox
-from toolforge.sandbox.run_bash import build_run_bash
+from toolforge.sandbox.run_bash import SANDBOX_SERIAL_GROUP, build_run_bash
 
 from tests.sandbox.test_bash import FakeRunner
+
+AUTHORED = AuthoredTests(
+    test_path="/workspace/build/fetch_rss/test_tool.py",
+    test_count=5,
+    report="5 failed (stub run)",
+    attempts=1,
+)
+
+BUILT = BuildResult(
+    code="def run(url):\n    return url\n",
+    code_path="/workspace/build/fetch_rss/tool.py",
+    test_path=AUTHORED.test_path,
+    test_report="test_tool.py::test_a PASSED\n5 passed in 0.03s",
+    attempts=2,
+)
+
+
+class FakeTestAuthor(TestAuthor):
+    """Scripted stand-in: returns the outcome, or raises it. Records specs."""
+
+    def __init__(self, outcome: AuthoredTests | TestAuthorError = AUTHORED) -> None:
+        self._outcome = outcome
+        self.specs: list[ToolSpec] = []
+
+    async def author_tests(self, spec: ToolSpec) -> AuthoredTests:
+        self.specs.append(spec)
+        if isinstance(self._outcome, TestAuthorError):
+            raise self._outcome
+        return self._outcome
+
+
+class FakeWorker(ForgeWorker):
+    """Scripted stand-in: returns the outcome, or raises it. Records builds."""
+
+    def __init__(self, outcome: BuildResult | WorkerError = BUILT) -> None:
+        self._outcome = outcome
+        self.builds: list[tuple[ToolSpec, AuthoredTests]] = []
+
+    async def build(self, spec: ToolSpec, tests: AuthoredTests) -> BuildResult:
+        self.builds.append((spec, tests))
+        if isinstance(self._outcome, WorkerError):
+            raise self._outcome
+        return self._outcome
 
 
 class ForgeEnv:
     """The REPL's forge object graph, built on a fake sandbox runner."""
 
-    def __init__(self, settings: SandboxSettings) -> None:
+    def __init__(
+        self,
+        settings: SandboxSettings,
+        *,
+        author_outcome: AuthoredTests | TestAuthorError = AUTHORED,
+        worker_outcome: BuildResult | WorkerError = BUILT,
+    ) -> None:
         self.settings = settings
         self.store = CandidateStore()
         self.registry = ToolRegistry(ToolContext())
         self.runner = FakeRunner([])
         self.sandbox = BashSandbox(settings, runner=self.runner)
-        self.forge = build_forge_tool(self.store, self.registry)
+        self.author = FakeTestAuthor(author_outcome)
+        self.worker = FakeWorker(worker_outcome)
+        self.forge = build_forge_tool(
+            self.store, self.registry, test_author=self.author, worker=self.worker
+        )
         self.register = build_register_tool(self.store, self.registry, self.sandbox, settings)
 
 
@@ -124,7 +189,10 @@ async def test_forge_bad_name_is_error(env: ForgeEnv, bad_name: Any) -> None:
 
 
 async def test_forge_name_collision_is_error(env: ForgeEnv) -> None:
-    clashing = build_forge_tool(CandidateStore(), env.registry)  # any tool named forge_tool
+    # Any registered tool named forge_tool works as the clashing entry.
+    clashing = build_forge_tool(
+        CandidateStore(), env.registry, test_author=FakeTestAuthor(), worker=FakeWorker()
+    )
     env.registry.register(clashing)
     result = await _call(env.forge, {**_valid_input(), "name": "forge_tool"})
     assert result.is_error
@@ -194,22 +262,87 @@ async def test_forge_valid_optional_fields_accepted(env: ForgeEnv) -> None:
         "examples": [{"input": {"url": "https://x.com/feed"}, "output": "Title: hi"}],
     }
     result = await _call(env.forge, inp)
-    # Optional fields are valid, so the only remaining error is the stub itself.
-    assert "not yet implemented" in str(result.content)
+    assert not result.is_error
+    # The optional fields flow into the spec handed to the build stages.
+    spec = env.author.specs[0]
+    assert spec.allowed_domains == ("api.example.com",)
+    assert spec.examples
 
 
-# ── forge_tool stub behavior ─────────────────────────────────────────────────
+# ── forge_tool pipeline ──────────────────────────────────────────────────────
 
 
-async def test_forge_valid_input_returns_guided_error(env: ForgeEnv) -> None:
+async def test_forge_success_stores_candidate_and_reports(env: ForgeEnv) -> None:
+    result = await _call(env.forge, _valid_input())
+    assert not result.is_error
+
+    # The stages ran in order, on the spec derived from the input.
+    assert env.author.specs[0].name == "fetch_rss"
+    assert env.worker.builds[0][1] is AUTHORED
+
+    # A fully-populated candidate awaits the holdout check — nothing registered.
+    candidate = env.store.get("fetch_rss")
+    assert candidate is not None
+    assert candidate.code_path == BUILT.code_path
+    assert candidate.test_path == BUILT.test_path
+    assert candidate.test_report == BUILT.test_report
+    assert candidate.gap_analysis
+    assert not env.registry.has("fetch_rss")
+
+    content = str(result.content)
+    assert "candidate 'fetch_rss' built" in content
+    assert "5 tests green" in content
+    assert "2 worker attempt(s)" in content
+    assert BUILT.code_path in content
+    assert "def run(url):" in content
+    assert "NOT registered" in content
+
+
+async def test_forge_serial_group(env: ForgeEnv) -> None:
+    # A build occupies the shared container for minutes; batched sibling
+    # sandbox calls must queue behind it.
+    assert env.forge.serial_group == SANDBOX_SERIAL_GROUP
+
+
+async def test_forge_author_failure_maps_to_guided_error(
+    sandbox_settings: SandboxSettings,
+) -> None:
+    env = ForgeEnv(
+        sandbox_settings,
+        author_outcome=TestAuthorError("authoring failed after 3 attempts; last failure: X"),
+    )
     result = await _call(env.forge, _valid_input())
     assert result.is_error
     content = str(result.content)
-    assert content.startswith("[forge_tool error:")
-    assert "not yet implemented" in content
-    assert "Do NOT retry" in content
-    # No candidate exists until a build actually succeeds.
+    assert content.startswith("[forge_tool error: test authoring failed")
+    assert "authoring failed after 3 attempts" in content
+    assert "Revise the spec" in content
     assert not env.store.has("fetch_rss")
+    assert not env.worker.builds  # the worker never ran
+
+
+async def test_forge_worker_exhaustion_maps_to_guided_error(
+    sandbox_settings: SandboxSettings,
+) -> None:
+    env = ForgeEnv(
+        sandbox_settings,
+        worker_outcome=WorkerError("tests still failing after 4 verification attempts"),
+    )
+    result = await _call(env.forge, _valid_input())
+    assert result.is_error
+    content = str(result.content)
+    assert "could not make the test suite pass" in content
+    assert "tests still failing after 4 verification attempts" in content
+    assert "/workspace/build/fetch_rss/" in content
+    assert "NOT a candidate" in content
+    assert not env.store.has("fetch_rss")
+
+
+async def test_forge_reforge_replaces_candidate(env: ForgeEnv) -> None:
+    await _call(env.forge, _valid_input())
+    stale = env.store.get("fetch_rss")
+    await _call(env.forge, _valid_input())
+    assert env.store.get("fetch_rss") is not stale  # revision path: put() replaces
 
 
 # ── register_tool validation ─────────────────────────────────────────────────
@@ -359,7 +492,9 @@ def test_all_three_tools_coregister(sandbox_settings: SandboxSettings) -> None:
     sandbox = BashSandbox(sandbox_settings, runner=FakeRunner([]))
     registry.register(build_run_bash(sandbox))
     candidates = CandidateStore()
-    registry.register(build_forge_tool(candidates, registry))
+    registry.register(
+        build_forge_tool(candidates, registry, test_author=FakeTestAuthor(), worker=FakeWorker())
+    )
     registry.register(build_register_tool(candidates, registry, sandbox, sandbox_settings))
     assert {s["name"] for s in registry.get_schemas()} == {
         "run_bash",

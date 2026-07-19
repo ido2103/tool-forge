@@ -1,16 +1,17 @@
 # Forge
 
-**Status: `register_tool` and the adversarial test author implemented.
-`forge_tool` remains stubbed pending the forge worker loop, which will wire the
-test author in.**
+**Status: fully implemented — `forge_tool` builds candidates through the test
+author + forge worker pipeline; `register_tool` promotes them.**
 
 Turns a tool spec from the orchestrator into a verified, registered tool. Exposed to the
 orchestrator as **two composable tools** (`src/toolforge/forge/tools.py`): `forge_tool`
-builds a *candidate*, and `register_tool` promotes it after the orchestrator's own
-holdout check. Both are wired into the REPL registry; `forge_tool` fully validates its
-input and returns a guided not-implemented error — the build loop is the next slice.
-`register_tool` is real: a candidate whose files exist in the workspace is promoted,
-persisted, and callable on the next turn.
+builds a *candidate* — validate the spec → test author writes a verified-red suite →
+the worker implements to a harness-verified green — and `register_tool` promotes it
+after the orchestrator's own holdout check. Both are wired into the REPL registry.
+`forge_tool` carries the sandbox serial group: a build occupies the shared container
+for minutes, so batched sibling sandbox calls queue behind it. Stage failures come
+back as guided errors: a test-author failure points at the spec (build dir removed);
+worker exhaustion carries the failure log and leaves the artifacts in the workspace.
 
 ## Orchestrator interface
 
@@ -161,33 +162,95 @@ worker slice will implement against.
   offline — the author is instructed to test only offline-verifiable behavior
   (argument validation, error contract, output shaping).
 
+## Forge worker
+
+The second stage of the build loop (`src/toolforge/forge/worker.py`,
+implemented): `ForgeWorker.build(spec, tests)` turns the authored red suite
+into a harness-verified green `tool.py`, or raises `WorkerError` carrying the
+last failure log for orchestrator escalation.
+
+- **An agentic mini-loop, not fix-in-context**: the worker's agent loop is the
+  orchestrator's own `Orchestrator` class (`src/toolforge/orchestrator/loop.py`),
+  instantiated with the worker's provider client, a **private** three-tool
+  registry, and `component="forge_worker"` (usage attribution). Reuse buys the
+  full stop_reason state machine, serial-group tool execution, and transient
+  retry; `OpenAICompatClient` maps `finish_reason` into the same stop_reason
+  vocabulary, so the loop is backend-agnostic.
+- **Worker toolset** (`src/toolforge/forge/worker_tools.py`), composable
+  primitives per the granularity principle; the deferred docs-RAG tool will
+  plug in later as just another registry entry:
+  - `write_tool_code` — writes the complete `tool.py` host-side. Deliberately
+    path-parameterless (the worker cannot overwrite the suite through it), and
+    it mechanically rejects syntax errors and **non-stdlib imports** — the
+    runtime container is minimal and rebuilt between sessions, so a
+    third-party import would break a persisted tool later even when tests
+    pass at forge time.
+  - `run_tests` — runs the suite with exactly the harness's pytest flags
+    (shared `pytest_command`). Advisory only, and its description says so.
+  - `run_bash` — the existing sandbox primitive, for debugging experiments.
+- **Evaluator-optimizer shape**: a driver loop alternates worker runs with the
+  **authoritative harness verification**; feedback (trimmed pytest output) is
+  appended to the same conversation. Budgets are configuration
+  (`TOOLFORGE_WORKER_*`): `max_attempts` harness verifications ×
+  `max_iterations` tool-call turns each, `max_tokens` per call, and a
+  `timeout_seconds` wall-clock deadline checked before every run and
+  verification.
+- **The pristine-suite verification (anti-reward-hack)**: the authored
+  `test_tool.py` is captured in driver memory before the worker's first turn.
+  Each verification (1) restores it if the on-disk copy differs, (2) sweeps
+  pytest config files (`conftest.py`, `pytest.ini`, `tox.ini`, `setup.cfg`,
+  `pyproject.toml`) from the build dir, `build/`, and the workspace root —
+  pytest walks ancestor directories for config discovery, (3) reruns the suite
+  **in a fresh, throwaway container started from the image for that one run**,
+  and (4) requires *exactly* the authored test count to PASS (exit 0 alone is
+  spoofable via `os._exit(0)` or partial collection).
+  **Tampering fails the attempt even if the restored suite passes**; the
+  feedback names the restored/removed files. The system prompt discloses the
+  mechanism up front and offers the escape valve: report a test believed to
+  contradict the spec rather than working around it.
+  The fresh container matters because the worker's `run_bash` has
+  unrestricted shell access to the session's *shared* container: anything
+  there outside `/workspace` (the `python3`/`pytest` binaries,
+  `sitecustomize.py`, shell rc files) must be presumed rigged and cannot be
+  restored host-side. A throwaway container carries none of it — only the
+  bind-mounted `/workspace`, which is exactly the state steps 1–2 restore.
+  Cost: one container start + pytest install (~seconds) per verification, at
+  forge time only.
+- **Worker transcripts**: each build mirrors the worker conversation to
+  `runs/forge-<name>-<ts>.jsonl` (same canonical `Message` JSONL as
+  orchestrator runs) — the debugging record and future eval substrate.
+- On budget exhaustion the build directory is **left in place** for
+  orchestrator inspection (unlike the test author's cleanup): the near-miss
+  artifacts help write a better spec.
+
+### Worker backend
+
+The worker is selected by configuration, not hardcoded. Both modes are first-class:
+
+- **api** (default): a cheaper Anthropic model (`TOOLFORGE_WORKER_API_MODEL`,
+  default `claude-haiku-4-5`) reusing the orchestrator's credentials — the
+  model is a per-send argument on the client, so no second auth path.
+- **local**: Qwen3.6-35B-A3B or Qwen3.6-27B (or anything else) served through
+  any OpenAI-compatible endpoint (LM Studio, Ollama, vLLM). Cuts token cost on
+  the high-volume implementation loop.
+
+Invariant in both modes: the worker is a **different model** from the
+orchestrator / test author — enforced loudly at boot by
+`validate_worker_separation` (`src/toolforge/config.py`).
+
 ## Loop (from [spec](spec.md))
 
 1. Receive the spec for the missing capability (see interface above).
 2. **Implemented** (see "Test author" above): a frontier model writes
    **adversarial tests from the spec only**, before any implementation exists
    (TDD).
-3. The forge worker (configurable backend, see below) implements against those tests
-   inside a harness, iterating until green.
-   - Worker has a **docs-RAG tool** to retrieve real API docs while coding — compensates
-     for small-model knowledge gaps.
-   - **Loop budget**: max N iterations, then escalate to the orchestrator with the
-     failure log.
+3. **Implemented** (see "Forge worker" above): the forge worker (configurable
+   backend) implements against those tests inside a harness, iterating until
+   green, under a config-bounded budget that escalates to the orchestrator
+   with the failure log on exhaustion. The spec'd docs-RAG tool is deferred
+   (see divergences).
 4. Hand back to the orchestrator for the satisfaction review (holdout check) —
    green tests alone never register a tool.
-
-## Worker backend
-
-The worker is selected by configuration, not hardcoded. Both modes are first-class:
-
-- **api** (default): a cheaper API model (e.g. Claude Haiku). No local hardware
-  required — the whole system runs API-only.
-- **local**: Qwen3.6-35B-A3B or Qwen3.6-27B, served through any OpenAI-compatible
-  endpoint (LM Studio, Ollama, vLLM). Cuts token cost on the high-volume
-  implementation loop.
-
-Invariant in both modes: the worker is a **different model** from the orchestrator /
-test author.
 
 ## Divergences from [spec.md](spec.md)
 
@@ -195,6 +258,17 @@ Recorded here per the documentation contract:
 
 - The spec pins the worker to local Qwen3.6-35B-A3B; the implemented system
   generalizes it to a configurable backend (api or local).
+- The spec gives the worker a **docs-RAG tool** for real API documentation;
+  deferred to a later slice. The worker's private registry is designed so it
+  plugs in as just another tool; until then the stdlib-only rule plus the
+  api-mode default (a model with solid stdlib knowledge) covers the gap.
+- The spec doesn't address a worker that games its tests; implemented as
+  harness-side **pristine-suite restoration** rather than trust: tampering is
+  detected, reverted, and fails the attempt even when the restored suite
+  passes (see "Forge worker").
+- On worker budget exhaustion the build artifacts are **kept** in the
+  workspace (the test author cleans up on failure; the worker's near-misses
+  are useful evidence for revising the spec).
 - The spec describes "a single **forge tool** call"; implemented as **two** composable
   tools (`forge_tool` + `register_tool`, per the granularity principle) so the holdout
   check stays in orchestrator judgment between build and registration.
