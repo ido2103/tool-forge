@@ -8,13 +8,15 @@ Concurrency: Textual owns the asyncio loop. The sandbox boots in a mount-time
 worker (first paint is never blocked); each turn runs in an exclusive worker
 awaiting ``Orchestrator.run``. Esc requests a graceful stop via the loop's own
 cancel-event machinery — the Textual worker itself is never cancelled, so the
-turn ends cleanly ("Stopping.") with history intact.
+turn ends cleanly ("Stopping.") with history intact. Two Escapes in quick
+succession quit (^Q also quits, but terminals like VSCode's swallow it).
 """
 
 from __future__ import annotations
 
 import asyncio
 import sys
+import time
 
 from pydantic import ValidationError
 from textual.app import App, ComposeResult
@@ -57,10 +59,14 @@ class ToolforgeApp(App[None]):
     CSS_PATH = "styles.tcss"
     TITLE = "toolforge"
     BINDINGS = [
-        Binding("escape", "stop_turn", "Stop turn"),
+        Binding("escape", "stop_turn", "Stop turn (×2 quit)"),
         Binding("ctrl+n", "new_session", "New session"),
         Binding("ctrl+q", "quit", "Quit"),
     ]
+
+    # Two Escapes within this window quit — ^Q never reaches the app inside
+    # VSCode's integrated terminal, so Esc-Esc is the portable quit chord.
+    _ESC_QUIT_WINDOW = 1.0
 
     def __init__(self, host: Host) -> None:
         super().__init__()
@@ -68,6 +74,7 @@ class ToolforgeApp(App[None]):
         self._history: list[Message] = []
         self._turn_running = False
         self._booted = False
+        self._last_escape = 0.0
 
     # ── layout ──────────────────────────────────────────────────────────────
 
@@ -78,7 +85,10 @@ class ToolforgeApp(App[None]):
             with Vertical(id="side"):
                 yield ToolActivity(id="activity")
                 yield ForgePanel(id="forge", classes="hidden")
-        yield Input(placeholder="type a task — /new /reset /quit · Esc stops a turn", id="prompt")
+        yield Input(
+            placeholder="type a task — /new /reset /quit · Esc stops a turn · Esc Esc quits",
+            id="prompt",
+        )
         yield Footer()
 
     @property
@@ -276,10 +286,18 @@ class ToolforgeApp(App[None]):
 
     # ── actions ─────────────────────────────────────────────────────────────
 
-    def action_stop_turn(self) -> None:
+    async def action_stop_turn(self) -> None:
+        now = time.monotonic()
+        if now - self._last_escape <= self._ESC_QUIT_WINDOW:
+            self._last_escape = 0.0
+            await self.action_quit()
+            return
+        self._last_escape = now
         if self._turn_running:
             self._host.orchestrator.request_stop()
             self.chat.add_system("(stop requested…)")
+        else:
+            self.notify("press esc again to quit", timeout=2)
 
     def action_new_session(self) -> None:
         if self._turn_running:

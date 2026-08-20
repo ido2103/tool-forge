@@ -351,7 +351,7 @@ async def test_stop_during_question_dismisses_modal(
         await app.workers.wait_for_complete()
         await app.handle_submit("transcribe my audio")
         await _wait_for_modal(app, pilot)
-        app.action_stop_turn()
+        await app.action_stop_turn()
         await app.workers.wait_for_complete()
         await pilot.pause()
         assert not isinstance(app.screen, AskUserScreen)
@@ -393,6 +393,64 @@ async def test_quit_during_turn_finishes_it_cleanly(
         # ending with the synthesized "Stopping." assistant message.
         assert app._history[-1].role == "assistant"
         assert app._history[-1].stop_reason == "interrupted"
+
+
+# ── double-escape quit (^Q never reaches the app in VSCode's terminal) ───────
+
+
+async def test_double_escape_quits(sandbox_settings: SandboxSettings) -> None:
+    host = make_stub_host(sandbox_settings, [])
+    app = ToolforgeApp(host)
+    async with app.run_test() as pilot:
+        await app.workers.wait_for_complete()
+        await pilot.press("escape", "escape")
+        await app.workers.wait_for_complete()
+        assert app._exit
+
+
+async def test_single_escape_does_not_quit(sandbox_settings: SandboxSettings) -> None:
+    host = make_stub_host(sandbox_settings, [])
+    app = ToolforgeApp(host)
+    async with app.run_test() as pilot:
+        await app.workers.wait_for_complete()
+        await pilot.press("escape")
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        assert not app._exit
+
+
+async def test_slow_second_escape_does_not_quit(sandbox_settings: SandboxSettings) -> None:
+    host = make_stub_host(sandbox_settings, [])
+    app = ToolforgeApp(host)
+    app._ESC_QUIT_WINDOW = 0.05
+    async with app.run_test() as pilot:
+        await app.workers.wait_for_complete()
+        await pilot.press("escape")
+        await asyncio.sleep(0.1)
+        await pilot.press("escape")  # window expired: re-arms instead of quitting
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        assert not app._exit
+
+
+async def test_double_escape_during_turn_stops_it_then_quits(
+    sandbox_settings: SandboxSettings,
+) -> None:
+    host = make_stub_host(sandbox_settings, [], client=_HangingClient([]))
+    app = ToolforgeApp(host)
+    async with app.run_test() as pilot:
+        await app.workers.wait_for_complete()
+        await app.handle_submit("hang forever")
+        await pilot.pause()
+        assert app.turn_running
+        await pilot.press("escape", "escape")
+        for _ in range(100):
+            if not app.turn_running:
+                break
+            await pilot.pause()
+        assert app._history[-1].stop_reason == "interrupted"
+        await app.workers.wait_for_complete()
+        assert app._exit
 
 
 # ── interleaved streaming (thinking → text → tool → thinking …) ──────────────
