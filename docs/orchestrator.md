@@ -162,6 +162,15 @@ liberal asking welcome on genuine ambiguity below that threshold; guards —
 batch related decisions into one question, never ask what a tool/registry/docs
 lookup can answer.
 
+## Testing the local backend
+
+Live smoke (deselected by default; needs a running OpenAI-compatible server and
+`TOOLFORGE_ORCHESTRATOR_BACKEND=local` + endpoint vars in the env/.env):
+
+```bash
+uv run pytest -m live tests/orchestrator/test_local_orchestrator_live.py
+```
+
 ## Design notes
 
 - The harness appends new tool schemas to subsequent API calls between turns; the model
