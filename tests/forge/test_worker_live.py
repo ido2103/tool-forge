@@ -88,7 +88,7 @@ async def test_author_then_worker_builds_green(tmp_path_factory: pytest.TempPath
             sandbox,
             sandbox_settings,
             author_settings,
-            model=author_settings.model or anthropic.model,
+            model=author_settings.effective_model(anthropic.model),
         )
         worker = ForgeWorker(
             worker_client,

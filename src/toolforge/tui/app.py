@@ -122,6 +122,8 @@ class ToolforgeApp(App[None]):
     async def _boot(self) -> None:
         for warning in self._host.tool_store_warnings:
             self.chat.add_error(f"[tool store: {warning}]")
+        for warning in self._host.config_warnings:
+            self.chat.add_error(f"[config: {warning}]")
         if self._host.loaded_tools:
             names = ", ".join(self._host.loaded_tools)
             self.chat.add_system(f"(loaded {len(self._host.loaded_tools)} forged tool(s): {names})")
@@ -375,8 +377,13 @@ def main() -> None:
         )
         raise SystemExit(1) from exc
     except ValueError as exc:
-        # e.g. the boot-time cross-model separation check.
-        print(f"Configuration error: {exc}", file=sys.stderr)
+        # e.g. missing Anthropic credentials or the cross-model separation check.
+        print(
+            f"Configuration error: {exc}\n\n"
+            "Copy .env.example to .env and fill in your credentials "
+            "(see TOOLFORGE_ANTHROPIC_* / ANTHROPIC_API_KEY).",
+            file=sys.stderr,
+        )
         raise SystemExit(1) from exc
     app = ToolforgeApp(host)
     proxy.bind(app)

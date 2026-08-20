@@ -76,7 +76,7 @@ async def test_author_round_trip(tmp_path: Path) -> None:
             sandbox,
             sandbox_settings,
             author_settings,
-            model=author_settings.model or anthropic.model,
+            model=author_settings.effective_model(anthropic.model),
         )
         result = await author.author_tests(_SPEC)
 

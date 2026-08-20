@@ -12,32 +12,40 @@ lands.
 
 | Role | Model | Owns |
 |------|-------|------|
-| Orchestrator | Frontier API model (Claude Sonnet/Opus) | All judgment: task execution, wall detection, spec & test authoring, skill authoring, satisfaction review |
+| Orchestrator | Configurable backend — frontier API model (Claude Sonnet/Opus, default) or a local OpenAI-compatible model | All judgment: task execution, wall detection, spec & test authoring, skill authoring, satisfaction review |
 | Forge worker | Configurable backend — see below | All labor: implementing tools against failing tests until green |
 
 The forge's **test author** is a distinct role within the frontier tier: it writes the
-adversarial tests the worker must satisfy, and defaults to the orchestrator's model
-(override via `TOOLFORGE_TEST_AUTHOR_MODEL`; loop knobs under the same prefix). The
-cross-model invariant below is author-vs-worker — sharing the orchestrator's model is
-fine, sharing the worker's is not.
+adversarial tests the worker must satisfy, and defaults to the orchestrator's api model
+(override via `TOOLFORGE_TEST_AUTHOR_MODEL`; loop knobs under the same prefix; a
+`TOOLFORGE_TEST_AUTHOR_BACKEND=local` switch with its own endpoint fields and
+`LOCAL_MODEL` exists for fully-local setups). The cross-model invariant below is
+author-vs-worker — sharing the orchestrator's model is fine, sharing the worker's is
+not.
 
-The forge worker backend is chosen by configuration; both modes are first-class:
+Every role's backend is chosen by configuration; both modes are first-class for each:
 
-- **api** (default): a cheaper API model (e.g. Claude Haiku). The system is fully
-  usable API-only — no local hardware required.
-- **local**: Qwen3.6-35B-A3B or Qwen3.6-27B, served through any OpenAI-compatible
-  endpoint (LM Studio, Ollama, vLLM). Cuts token cost on the high-volume
-  implementation loop.
+- **api** (default): an Anthropic API model — frontier for the orchestrator/test
+  author, cheaper (e.g. Claude Haiku) for the worker. The system is fully usable
+  API-only — no local hardware required.
+- **local**: any model served through an OpenAI-compatible endpoint (LM Studio,
+  Ollama, vLLM, llama.cpp) — Qwen3.6-35B-A3B / Qwen3.6-27B are the reference
+  choices. Cuts token cost; a fully-local configuration (all three roles on
+  `local`) boots without Anthropic credentials.
 
-Frontier tokens for decisions, cheap tokens for sweat. One invariant holds in both
-modes: **the worker is never the same model as the orchestrator** — cross-model
-separation mitigates the self-verification trap.
+Frontier tokens for decisions, cheap tokens for sweat. One invariant holds across
+backends: **the worker is never the same model as the orchestrator or test author** —
+cross-model separation mitigates the self-verification trap. Single relaxation: when
+both colliding roles run *local* backends the boot check downgrades the collision to
+a warning (single-GPU setups may serve one model for everything), enforced by
+`validate_worker_separation` in `src/toolforge/config.py`.
 
 > **Divergence from [spec.md](spec.md):** the spec pins the worker to local
-> Qwen3.6-35B-A3B. The implemented system generalizes it to a configurable backend
-> (api or local, with 27B as an additional local option) so running without a
-> local-model workstation is fully supported. Recorded here per the documentation
-> contract.
+> Qwen3.6-35B-A3B and the orchestrator to a frontier API model. The implemented
+> system generalizes all three roles (orchestrator, test author, worker) to
+> configurable backends (api or local, with 27B as an additional local option), so
+> both API-only *and* fully-local operation are supported. Recorded here per the
+> documentation contract.
 
 ## Core loop
 
@@ -65,8 +73,8 @@ Each maps to a package under `src/toolforge/` and a doc in this folder:
 - [skills](skills.md) — markdown playbooks + per-tool usage skills
 - [sandbox](sandbox.md) — isolated execution for all generated code
 - [evals](evals.md) — reuse rate, composition depth, held-out success (the README graphs)
-- [providers](providers.md) — model clients: Anthropic (orchestrator; api-key/OAuth) +
-  OpenAI-compatible (forge worker; vLLM/llama.cpp), canonical message types, usage hook
+- [providers](providers.md) — model clients: Anthropic (api backends; api-key/OAuth) +
+  OpenAI-compatible (local backends; vLLM/llama.cpp), canonical message types, usage hook
 - [tui](tui.md) — Textual interactive surface (`toolforge`, the default entry
   point); the stdlib REPL (`toolforge-repl`) is the dependency-free fallback —
   both are thin hosts over `orchestrator/bootstrap.py::build_host`
@@ -112,9 +120,10 @@ Runtime configuration comes from `.env` via `src/toolforge/config.py`
 
 **How it wires together today:** the REPL loads settings, runs the boot-time
 cross-model check (`validate_worker_separation`: worker ≠ orchestrator/test
-author), and builds an `AnthropicClient` plus the worker client (api mode
-reuses the Anthropic client with the cheaper worker model; local mode gets an
-`OpenAICompatClient`), a `BashSandbox` + `ToolRegistry` (with `run_bash`,
+author; local-vs-local collisions come back as warnings the host renders), and
+builds one shared `AnthropicClient` iff any role uses the api backend plus an
+`OpenAICompatClient` per local-backend role (api roles reuse the shared client —
+the model is a per-send argument), a `BashSandbox` + `ToolRegistry` (with `run_bash`,
 `ask_user` bound to a stdin prompt callback, and `forge_tool` — carrying a
 `TestAuthor` and a `ForgeWorker` — + `register_tool` bound to a shared
 `CandidateStore` and the live registry), installs the forged-tool runner and

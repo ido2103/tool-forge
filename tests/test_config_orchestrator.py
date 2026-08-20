@@ -12,10 +12,35 @@ from toolforge.config import OrchestratorSettings, SandboxSettings
 
 def test_orchestrator_defaults(clean_provider_env: None) -> None:
     s = OrchestratorSettings()
+    assert s.backend == "api"
+    assert s.model == "Qwen/Qwen3.6-27B"
+    assert s.host == "127.0.0.1"
+    assert s.port == 8000
     assert s.max_tokens_per_turn == 32_000
     assert s.max_iterations == 30
     assert s.system_prompt_path is None
     assert s.runs_dir == Path("runs")
+
+
+def test_orchestrator_backend_env_vars(
+    clean_provider_env: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TOOLFORGE_ORCHESTRATOR_BACKEND", "local")
+    monkeypatch.setenv("TOOLFORGE_ORCHESTRATOR_HOST", "192.168.1.250")
+    monkeypatch.setenv("TOOLFORGE_ORCHESTRATOR_PORT", "8090")
+    monkeypatch.setenv("TOOLFORGE_ORCHESTRATOR_MODEL", "qwen-27b")
+
+    s = OrchestratorSettings()
+    assert s.backend == "local"
+    assert s.base_url == "http://192.168.1.250:8090/v1"
+    assert s.model == "qwen-27b"
+
+
+def test_orchestrator_effective_model(clean_provider_env: None) -> None:
+    api = OrchestratorSettings(_env_file=None, backend="api", model="m-local")
+    local = OrchestratorSettings(_env_file=None, backend="local", model="m-local")
+    assert api.effective_model("claude-x") == "claude-x"
+    assert local.effective_model("claude-x") == "m-local"
 
 
 def test_orchestrator_env_vars(clean_provider_env: None, monkeypatch: pytest.MonkeyPatch) -> None:

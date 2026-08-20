@@ -165,6 +165,8 @@ async def _amain(args: argparse.Namespace) -> None:
     system_prompt = host.system_prompt
     for warning in host.tool_store_warnings:
         print(_style(f"[tool store: {warning}]", "33"), file=sys.stderr)
+    for warning in host.config_warnings:
+        print(_style(f"[config: {warning}]", "33"), file=sys.stderr)
     if host.loaded_tools:
         print(
             _dim(
@@ -248,8 +250,13 @@ def main() -> None:
         )
         raise SystemExit(1) from exc
     except ValueError as exc:
-        # e.g. the boot-time cross-model separation check.
-        print(f"Configuration error: {exc}", file=sys.stderr)
+        # e.g. missing Anthropic credentials or the cross-model separation check.
+        print(
+            f"Configuration error: {exc}\n\n"
+            "Copy .env.example to .env and fill in your credentials "
+            "(see TOOLFORGE_ANTHROPIC_* / ANTHROPIC_API_KEY).",
+            file=sys.stderr,
+        )
         raise SystemExit(1) from exc
     except KeyboardInterrupt:
         raise SystemExit(130) from None

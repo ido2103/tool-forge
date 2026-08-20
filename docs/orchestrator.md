@@ -5,8 +5,10 @@ handling, serial-group tool execution, cancellation, and transcripts — plus th
 `ask_user` clarification tool (blocking mid-turn question, REPL-serviced). The
 wall detector, spec/skill authoring, and satisfaction review are not yet built.**
 
-The frontier-model brain (Claude Sonnet/Opus via API). Owns every judgment call in the
-system; the forge worker never decides, only implements.
+The system's brain — a frontier API model (Claude Sonnet/Opus) by default, or any
+local OpenAI-compatible model via `TOOLFORGE_ORCHESTRATOR_BACKEND=local` (endpoint
+fields + model id under the same prefix). Owns every judgment call in the system;
+the forge worker never decides, only implements.
 
 ## What exists today (`src/toolforge/orchestrator/`)
 
@@ -63,17 +65,24 @@ the loop mutates it in place and mirrors every message to a `Transcript`.
   `ON_FORGE_PHASE` build-progress events (see [forge.md](forge.md)); the REPL
   renders them as dim one-liners.
 
-Config comes from `OrchestratorSettings` (`max_iterations`, `max_tokens_per_turn`,
-`system_prompt_path`, `runs_dir`).
+Config comes from `OrchestratorSettings` (`backend` api|local with local endpoint
+fields — `host`/`port`/`model`/`api_key` — plus `max_iterations`,
+`max_tokens_per_turn`, `system_prompt_path`, `runs_dir`). In api mode the model id
+is `TOOLFORGE_ANTHROPIC_MODEL`; `effective_model()` resolves the one actually run.
+Local servers often cap output tokens well below the 32k default — tune
+`TOOLFORGE_ORCHESTRATOR_MAX_TOKENS_PER_TURN` down when running local.
 
 ## Host assembly (`bootstrap.py`)
 
 `build_host(anthropic, orch, sandbox, worker, test_author, *, hooks=None,
 ask_user=None) -> Host` is the single assembly point every surface boots
-through: it validates the cross-model invariant, wires clients, sandbox, forge
-pipeline, registry, transcript, and the loop, and returns a `Host` dataclass
+through: it validates the cross-model invariant (local-vs-local collisions
+downgrade to warnings), builds one shared `AnthropicClient` iff any role uses the
+api backend plus an `OpenAICompatClient` per local-backend role, wires sandbox,
+forge pipeline, registry, transcript, and the loop, and returns a `Host` dataclass
 (`orchestrator`, `sandbox`, `candidates`, `registry`, `hooks`, `system_prompt`,
-`model`, `loaded_tools`, `tool_store_warnings`). Hosts differ only in what they
+`model` — the orchestrator's *effective* model id, `loaded_tools`,
+`tool_store_warnings`, `config_warnings`). Hosts differ only in what they
 inject:
 
 - **`hooks`** — a `HookManager` pre-loaded with the host's observers (the REPL
@@ -84,8 +93,8 @@ inject:
 
 `build_host` performs no I/O beyond reading the persisted toolbox — no container
 start (callers own `sandbox.start()`), no printing: boot findings
-(`loaded_tools`, `tool_store_warnings`) come back on the `Host` for the caller
-to render. The REPL (`repl.py`) is now a thin driver over `build_host`; future
+(`loaded_tools`, `tool_store_warnings`, `config_warnings`) come back on the
+`Host` for the caller to render. The REPL (`repl.py`) is now a thin driver over `build_host`; future
 hosts (TUI, evals, web/MCP) call the same function with their own injections.
 
 ## Responsibilities (from [spec](spec.md))
@@ -158,4 +167,5 @@ lookup can answer.
 - The harness appends new tool schemas to subsequent API calls between turns; the model
   never edits its own payload.
 - Orchestration accumulates long context (tool registry, task history) — this is why the
-  role gets the frontier model.
+  role gets the frontier model by default; the local backend trades that judgment
+  quality for cost, and long sessions can exceed a small local context window.

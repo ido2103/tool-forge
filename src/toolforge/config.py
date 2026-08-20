@@ -127,13 +127,15 @@ class WorkerSettings(LocalEndpointSettings):
         return v
 
 
-class TestAuthorSettings(BaseSettings):
-    """Forge test-author knobs: model override plus the authoring-loop budget.
+class TestAuthorSettings(LocalEndpointSettings):
+    """Forge test-author knobs: backend/model selection plus the authoring-loop budget.
 
     The test author is frontier-tier by design (it writes the adversarial tests
-    the worker must satisfy); ``model=None`` means "use the orchestrator's
-    model", which preserves the author-vs-worker cross-model invariant without
-    a second credentials path.
+    the worker must satisfy), so the default backend is ``api`` with
+    ``model=None`` — "use the orchestrator's api model", which preserves the
+    author-vs-worker cross-model invariant without a second credentials path.
+    A ``local`` backend (own endpoint fields under this prefix, model id in
+    ``local_model``) is available for fully-local setups.
     """
 
     # The Test* name matches pytest's collection convention; opt out explicitly.
@@ -146,7 +148,13 @@ class TestAuthorSettings(BaseSettings):
         populate_by_name=True,
     )
 
+    backend: Literal["api", "local"] = "api"
+    # api mode: overrides the model id; None → the orchestrator's api model.
     model: str | None = None
+    # local mode only — the model id served at the author's endpoint. Named
+    # local_model (not model, as on WorkerSettings) to keep the long-standing
+    # TOOLFORGE_TEST_AUTHOR_MODEL meaning intact.
+    local_model: str = "Qwen/Qwen3.6-27B"
     max_attempts: int = 3
     max_tokens: int = 16_000
     min_tests: int = 5
@@ -154,6 +162,12 @@ class TestAuthorSettings(BaseSettings):
     # sandbox command checks the deadline before starting, so overshoot is
     # bounded by the longest single step.
     timeout_seconds: int = 1500
+
+    def effective_model(self, api_default: str) -> str:
+        """The model the test author actually runs, per the selected backend."""
+        if self.backend == "api":
+            return self.model or api_default
+        return self.local_model
 
     @field_validator("max_attempts", "max_tokens", "min_tests", "timeout_seconds")
     @classmethod
@@ -163,8 +177,14 @@ class TestAuthorSettings(BaseSettings):
         return v
 
 
-class OrchestratorSettings(BaseSettings):
-    """Agent-loop knobs: turn/token budget, prompt override, transcript sink."""
+class OrchestratorSettings(LocalEndpointSettings):
+    """Orchestrator backend selection plus agent-loop knobs.
+
+    Two backends, mirroring the worker: ``api`` (default; Anthropic, model id
+    from ``TOOLFORGE_ANTHROPIC_MODEL``) and ``local`` (any OpenAI-compatible
+    server; endpoint fields under this prefix, model id in ``model``). Loop
+    knobs: turn/token budget, prompt override, transcript sink.
+    """
 
     model_config = SettingsConfigDict(
         env_prefix="TOOLFORGE_ORCHESTRATOR_",
@@ -173,6 +193,12 @@ class OrchestratorSettings(BaseSettings):
         populate_by_name=True,
     )
 
+    backend: Literal["api", "local"] = "api"
+    # local mode only — the model id served at http://{host}:{port}/v1. In api
+    # mode the orchestrator model comes from TOOLFORGE_ANTHROPIC_MODEL.
+    model: str = "Qwen/Qwen3.6-27B"
+    # Local servers often cap output tokens well below 32k — tune this down
+    # when running backend=local.
     max_tokens_per_turn: int = 32_000
     max_iterations: int = 30
     # None → the loop loads the bundled default prompt (orchestrator/prompts/system.md).
@@ -190,6 +216,11 @@ class OrchestratorSettings(BaseSettings):
     @classmethod
     def _expand(cls, v: Path | None) -> Path | None:
         return v.expanduser() if v is not None else None
+
+    def effective_model(self, api_model: str) -> str:
+        """The model the orchestrator actually runs: *api_model* (the caller
+        passes ``AnthropicSettings.model``) in api mode, ``model`` otherwise."""
+        return api_model if self.backend == "api" else self.model
 
 
 class SandboxSettings(BaseSettings):
@@ -239,24 +270,46 @@ def validate_worker_separation(
     worker: WorkerSettings,
     anthropic: AnthropicSettings,
     test_author: TestAuthorSettings,
-) -> None:
+    orchestrator: OrchestratorSettings,
+) -> list[str]:
     """Enforce the cross-model invariant at boot: worker ≠ orchestrator/test author.
 
     Cross-model separation mitigates the self-verification trap — the model
     that implements a tool must never be the one that wrote its tests or the
     one that judges the result. Raises ``ValueError`` so a misconfigured boot
     fails loudly before any task runs.
+
+    One relaxation: when BOTH colliding roles run local backends the collision
+    downgrades to a returned warning string (single-GPU convenience — one
+    llama.cpp server, one model). Any collision involving an api-backend role
+    still raises.
     """
+    warnings: list[str] = []
     worker_model = worker.effective_model
-    author_model = test_author.model or anthropic.model
-    if worker_model == anthropic.model:
-        raise ValueError(
-            f"worker model {worker_model!r} equals the orchestrator model; the forge "
-            "worker must be a different model (set TOOLFORGE_WORKER_API_MODEL / "
-            "TOOLFORGE_WORKER_MODEL or change the orchestrator model)"
-        )
+    orch_model = orchestrator.effective_model(anthropic.model)
+    author_model = test_author.effective_model(anthropic.model)
+
+    if worker_model == orch_model:
+        if worker.backend == "local" and orchestrator.backend == "local":
+            warnings.append(
+                f"worker and orchestrator share the local model {worker_model!r}; "
+                "cross-model separation is degraded (self-verification risk)"
+            )
+        else:
+            raise ValueError(
+                f"worker model {worker_model!r} equals the orchestrator model; the forge "
+                "worker must be a different model (set TOOLFORGE_WORKER_API_MODEL / "
+                "TOOLFORGE_WORKER_MODEL or change the orchestrator model)"
+            )
     if worker_model == author_model:
-        raise ValueError(
-            f"worker model {worker_model!r} equals the test-author model; the model "
-            "that implements a tool must not be the one that wrote its tests"
-        )
+        if worker.backend == "local" and test_author.backend == "local":
+            warnings.append(
+                f"worker and test author share the local model {worker_model!r}; "
+                "the tests and the implementation come from the same model"
+            )
+        else:
+            raise ValueError(
+                f"worker model {worker_model!r} equals the test-author model; the model "
+                "that implements a tool must not be the one that wrote its tests"
+            )
+    return warnings
