@@ -131,8 +131,13 @@ propagated).
 
 `src/toolforge/config.py` — pydantic-settings, `.env` + environment only (no
 YAML). Every variable is documented in [`.env.example`](../.env.example).
-Fail-fast validation: `api_key` mode requires a key; `oauth` mode requires the
-creds file to exist.
+Credential validation is lazy: `AnthropicSettings` constructs without
+credentials (`has_credentials` reports availability), and
+`AnthropicClient.__init__` calls `require_credentials()` — `api_key` mode
+requires a key, `oauth` mode requires the creds file to exist. The failure is
+still at boot (client construction in `build_host`), but only when a role
+actually uses the Anthropic client, so a fully-local boot needs no Anthropic
+account.
 
 ## Testing
 

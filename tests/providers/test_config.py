@@ -60,9 +60,17 @@ def test_anthropic_api_key_prefixed_env_alias(
     assert s.api_key.get_secret_value() == "from-prefixed-env"
 
 
+def test_settings_construct_without_credentials(clean_provider_env: None) -> None:
+    # Credential-free construction is deliberate: a fully-local boot builds the
+    # settings but never an AnthropicClient.
+    s = AnthropicSettings()
+    assert s.api_key is None
+    assert s.has_credentials is False
+
+
 def test_api_key_required_in_api_key_mode(clean_provider_env: None) -> None:
-    with pytest.raises(ValidationError, match="ANTHROPIC_API_KEY is required"):
-        AnthropicSettings()
+    with pytest.raises(ValueError, match="ANTHROPIC_API_KEY is required"):
+        AnthropicSettings().require_credentials()
 
 
 def test_cache_ttl_rejects_old_ephemeral_value(
@@ -76,8 +84,10 @@ def test_cache_ttl_rejects_old_ephemeral_value(
 
 
 def test_oauth_mode_requires_existing_creds_file(clean_provider_env: None, tmp_path: Path) -> None:
-    with pytest.raises(ValidationError, match="credentials file not found"):
-        AnthropicSettings(auth_mode="oauth", oauth_credentials_path=tmp_path / "missing.json")
+    s = AnthropicSettings(auth_mode="oauth", oauth_credentials_path=tmp_path / "missing.json")
+    assert s.has_credentials is False
+    with pytest.raises(ValueError, match="credentials file not found"):
+        s.require_credentials()
 
 
 def test_oauth_path_expanduser(clean_provider_env: None) -> None:

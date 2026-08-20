@@ -13,7 +13,6 @@ pytest. Skips (not fails) when either piece is missing.
 from __future__ import annotations
 
 import pytest
-from pydantic import ValidationError
 
 from tests._docker import DOCKER_SKIP_REASON, docker_available
 from toolforge.config import (
@@ -33,10 +32,10 @@ pytestmark = [
 
 
 def _anthropic_settings_or_skip() -> AnthropicSettings:
-    try:
-        return AnthropicSettings()
-    except ValidationError:
+    settings = AnthropicSettings()
+    if not settings.has_credentials:
         pytest.skip("no Anthropic credentials configured (env vars / .env)")
+    return settings
 
 
 _SPEC = ToolSpec(

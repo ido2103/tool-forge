@@ -9,9 +9,9 @@ variable and its default. No YAML layer — add one only if config outgrows
 from __future__ import annotations
 
 from pathlib import Path
-from typing import ClassVar, Literal, Self
+from typing import ClassVar, Literal
 
-from pydantic import AliasChoices, Field, SecretStr, field_validator, model_validator
+from pydantic import AliasChoices, Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -41,8 +41,19 @@ class AnthropicSettings(BaseSettings):
     def _expand_user(cls, v: Path) -> Path:
         return v.expanduser()
 
-    @model_validator(mode="after")
-    def _check_auth(self) -> Self:
+    @property
+    def has_credentials(self) -> bool:
+        """True when the configured auth mode has usable credentials."""
+        if self.auth_mode == "api_key":
+            return self.api_key is not None
+        return self.oauth_credentials_path.exists()
+
+    def require_credentials(self) -> None:
+        """Raise ``ValueError`` when credentials are absent.
+
+        Called by ``AnthropicClient`` at construction — settings themselves must
+        build credential-free so a fully-local boot needs no Anthropic account.
+        """
         if self.auth_mode == "api_key" and self.api_key is None:
             raise ValueError("ANTHROPIC_API_KEY is required when auth_mode='api_key'")
         if self.auth_mode == "oauth" and not self.oauth_credentials_path.exists():
@@ -50,7 +61,6 @@ class AnthropicSettings(BaseSettings):
                 f"OAuth credentials file not found: {self.oauth_credentials_path} "
                 "(required when auth_mode='oauth')"
             )
-        return self
 
 
 class LocalEndpointSettings(BaseSettings):
