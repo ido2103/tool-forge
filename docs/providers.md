@@ -72,8 +72,10 @@ Streams via the official `anthropic` SDK. Configured by
 ## OpenAICompatClient (`openai_compat.py`) — forge worker
 
 Chat Completions against any OpenAI-compatible server (vLLM, llama.cpp,
-LM Studio, Ollama) at `http://{host}:{port}/v1`, configured by
-`toolforge.config.WorkerSettings`. The caller still passes canonical messages
+LM Studio, Ollama) at `http://{host}:{port}/v1`, configured by any
+`toolforge.config.LocalEndpointSettings` subclass (endpoint fields
+`host`/`port`/`api_key` under the role's env prefix, e.g. `WorkerSettings`).
+The caller still passes canonical messages
 and Anthropic-shape tools; the adapter translates both ways and mints stable
 `toolu_...` ids for OpenAI `call_...` ids (`IdMapper`).
 

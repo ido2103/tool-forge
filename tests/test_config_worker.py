@@ -63,6 +63,19 @@ def test_effective_model_by_backend(clean_provider_env: None) -> None:
     assert local.effective_model == "m-local"
 
 
+def test_worker_inherited_endpoint_env_vars(
+    clean_provider_env: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The endpoint fields inherited from LocalEndpointSettings read the worker prefix."""
+    monkeypatch.setenv("TOOLFORGE_WORKER_HOST", "192.168.1.250")
+    monkeypatch.setenv("TOOLFORGE_WORKER_PORT", "8090")
+    monkeypatch.setenv("TOOLFORGE_WORKER_API_KEY", "sekrit")
+
+    s = WorkerSettings()
+    assert s.base_url == "http://192.168.1.250:8090/v1"
+    assert s.api_key.get_secret_value() == "sekrit"
+
+
 # ── validate_worker_separation ───────────────────────────────────────────────
 
 

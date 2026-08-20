@@ -1,4 +1,4 @@
-"""OpenAI-compatible Chat Completions adapter — the forge worker's model client.
+"""OpenAI-compatible Chat Completions adapter — the client for any role's local backend.
 
 Targets local OpenAI-compatible servers (vLLM, llama.cpp, LM Studio, Ollama)
 at ``http://{host}:{port}/v1``. The ``IdMapper`` and the stream/send/drain
@@ -28,7 +28,7 @@ from uuid import UUID
 import httpx
 import openai
 
-from toolforge.config import WorkerSettings
+from toolforge.config import LocalEndpointSettings
 from toolforge.providers.base import (
     AuthMode,
     MessageEnd,
@@ -224,7 +224,9 @@ class OpenAICompatClient:
 
     name: str = "openai"
 
-    def __init__(self, settings: WorkerSettings, usage_hook: UsageHook | None = None) -> None:
+    def __init__(
+        self, settings: LocalEndpointSettings, usage_hook: UsageHook | None = None
+    ) -> None:
         self.settings = settings
         self.auth_mode = AuthMode.API_KEY
         self._usage_hook: UsageHook = usage_hook or log_usage

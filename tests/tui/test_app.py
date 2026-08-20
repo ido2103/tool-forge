@@ -433,6 +433,18 @@ async def test_slow_second_escape_does_not_quit(sandbox_settings: SandboxSetting
         assert not app._exit
 
 
+async def test_ctrl_c_toast_names_the_esc_chord(sandbox_settings: SandboxSettings) -> None:
+    host = make_stub_host(sandbox_settings, [])
+    app = ToolforgeApp(host)
+    async with app.run_test(notifications=True) as pilot:
+        await app.workers.wait_for_complete()
+        app.chat.focus()  # ctrl+c on the focused Input would mean "copy"
+        await pilot.press("ctrl+c")
+        await pilot.pause()
+        assert any("esc esc" in n.message for n in app._notifications)
+        assert not app._exit
+
+
 async def test_double_escape_during_turn_stops_it_then_quits(
     sandbox_settings: SandboxSettings,
 ) -> None:

@@ -299,6 +299,13 @@ class ToolforgeApp(App[None]):
         else:
             self.notify("press esc again to quit", timeout=2)
 
+    def action_help_quit(self) -> None:
+        """Ctrl+C hint toast — Textual's stock one only names ^Q, which
+        terminals like VSCode's swallow, so advertise the Esc chord too."""
+        self.notify(
+            "Press [b]esc esc[/b] (or ctrl+q) to quit the app", title="Do you want to quit?"
+        )
+
     def action_new_session(self) -> None:
         if self._turn_running:
             self.chat.add_system("(a turn is running — Esc to stop it first)")

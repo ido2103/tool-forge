@@ -99,8 +99,10 @@ Textual owns the asyncio loop; nothing runs on threads.
 container) · `/quit` `/exit` · unknown `/x` gets a hint. `Esc` stops the
 running turn; two `Esc` within ~1 s quit (`^Q` also quits, but terminals like
 VSCode's swallow it before it reaches the app — Esc-Esc is the portable
-chord; a lone idle Esc shows a "press esc again to quit" toast); `^N` =
-`/new`. Commands other than quit are rejected while a turn runs. **Quit during a turn** is graceful: `request_stop`, then a
+chord; a lone idle Esc shows a "press esc again to quit" toast, and `^C` —
+copy while the prompt is focused — toasts the Esc-Esc chord instead of
+Textual's stock ^Q-only hint); `^N` = `/new`. Commands other than quit are
+rejected while a turn runs. **Quit during a turn** is graceful: `request_stop`, then a
 bounded (~3 s) wait in a worker for the loop's "Stopping." finish before
 `exit()` — a wedged turn never traps the user. Sandbox teardown stays on the
 `atexit` hook registered by `build_host`.

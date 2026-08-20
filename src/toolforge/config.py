@@ -53,7 +53,25 @@ class AnthropicSettings(BaseSettings):
         return self
 
 
-class WorkerSettings(BaseSettings):
+class LocalEndpointSettings(BaseSettings):
+    """Shared fields for a local OpenAI-compatible endpoint (vLLM / llama.cpp / LM Studio).
+
+    Base class only — always instantiate a role subclass, whose ``model_config``
+    supplies the env prefix (pydantic-settings applies it to inherited fields).
+    """
+
+    host: str = "127.0.0.1"
+    port: int = 8000
+    # vLLM convention: server without --api-key accepts any value, but the
+    # OpenAI SDK requires a non-empty key.
+    api_key: SecretStr = SecretStr("EMPTY")
+
+    @property
+    def base_url(self) -> str:
+        return f"http://{self.host}:{self.port}/v1"
+
+
+class WorkerSettings(LocalEndpointSettings):
     """Forge-worker backend selection, model access, and build-loop budgets.
 
     Two first-class backends: ``api`` (default; a cheaper Anthropic model
@@ -74,13 +92,9 @@ class WorkerSettings(BaseSettings):
 
     backend: Literal["api", "local"] = "api"
     api_model: str = "claude-haiku-4-5"
-    # local mode: OpenAI-compatible server.
-    host: str = "127.0.0.1"
-    port: int = 8000
+    # local mode: OpenAI-compatible server (endpoint fields — host/port/api_key —
+    # inherited from LocalEndpointSettings under the TOOLFORGE_WORKER_ prefix).
     model: str = "Qwen/Qwen3.6-27B"
-    # vLLM convention: server without --api-key accepts any value, but the
-    # OpenAI SDK requires a non-empty key.
-    api_key: SecretStr = SecretStr("EMPTY")
     # Build-loop budgets — bounded in code, never tool parameters (a failed
     # forge is answered with a better spec, not a bigger budget).
     max_attempts: int = 4  # authoritative harness verifications per build
@@ -89,10 +103,6 @@ class WorkerSettings(BaseSettings):
     # Wall-clock ceiling for one build() call, checked before every worker run
     # and verification; overshoot is bounded by the longest single step.
     timeout_seconds: int = 1800
-
-    @property
-    def base_url(self) -> str:
-        return f"http://{self.host}:{self.port}/v1"
 
     @property
     def effective_model(self) -> str:
