@@ -87,10 +87,18 @@ and Anthropic-shape tools; the adapter translates both ways and mints stable
 | `tool_calls`, `function_call` | `tool_use` |
 | `length` | `max_tokens` |
 | `content_filter` | `refusal` |
-| anything else | passed through unchanged |
+| absent or anything else | `end_turn` (logged) — the agent loop rejects vocabulary outside the Anthropic stop_reason set, and llama.cpp can omit finish_reason or emit oddities |
+
+Outbound histories are repaired by `repair_orphaned_tool_uses_canonical` (the
+canonical-level twin of `_anthropic_sanitize.fix_orphaned_tool_uses`): an
+interrupted turn's `tool_use` with no matching `tool_result` gets a synthetic
+error result, so strict Chat Completions servers don't reject the history.
 
 `delta.reasoning_content` (the vLLM/llama.cpp reasoning-parser extension for
 Qwen-style models) maps to `ThinkingDelta` / an unsigned `ThinkingBlock`.
+Known gaps: thinking blocks are *dropped outbound* (no reasoning continuity
+across turns on this path), and a llama.cpp server started without a
+reasoning-parser flag leaves `<think>` text inline in `content`.
 Malformed streamed tool arguments fall back to `{}` input rather than crashing.
 Same retry ladder as the Anthropic client (local servers drop connections
 during warm-up), with the same rule: no retry once any event was delivered —

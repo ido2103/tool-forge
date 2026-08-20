@@ -219,6 +219,59 @@ def canonical_to_chat_messages(
     return out
 
 
+def repair_orphaned_tool_uses_canonical(messages: list[Message]) -> list[Message]:
+    """Return a copy where every assistant tool_use has a matching tool_result.
+
+    Canonical-level twin of ``_anthropic_sanitize.fix_orphaned_tool_uses`` (which
+    repairs Anthropic-shape dicts after translation): an interrupted turn can
+    leave a ``tool_use`` with no ``tool_result`` in the following user message,
+    which strict Chat Completions servers reject. Synthetic error results are
+    prepended to the next user message, or inserted as a new user message when
+    none follows. The input list and its messages are never mutated.
+    """
+    out: list[Message] = []
+    i = 0
+    while i < len(messages):
+        msg = messages[i]
+        if msg.role != "assistant":
+            out.append(msg)
+            i += 1
+            continue
+        tool_use_ids = [b.id for b in msg.content if isinstance(b, ToolUseBlock)]
+        if not tool_use_ids:
+            out.append(msg)
+            i += 1
+            continue
+        next_msg = messages[i + 1] if i + 1 < len(messages) else None
+        fulfilled = {
+            b.tool_use_id
+            for b in (next_msg.content if next_msg and next_msg.role == "user" else [])
+            if isinstance(b, ToolResultBlock)
+        }
+        orphans = [tid for tid in tool_use_ids if tid not in fulfilled]
+        if not orphans:
+            out.append(msg)
+            i += 1
+            continue
+        logger.warning("openai_compat.repairing_orphaned_tool_uses ids=%s", orphans)
+        synthetic: list[ContentBlock] = [
+            ToolResultBlock(
+                tool_use_id=tid,
+                content="[Error: tool execution was interrupted]",
+                is_error=True,
+            )
+            for tid in orphans
+        ]
+        out.append(msg)
+        if next_msg is not None and next_msg.role == "user":
+            out.append(next_msg.model_copy(update={"content": synthetic + list(next_msg.content)}))
+            i += 2
+        else:
+            out.append(Message(role="user", content=synthetic, ts=msg.ts))
+            i += 1
+    return out
+
+
 class OpenAICompatClient:
     """Chat Completions adapter for local OpenAI-compatible servers."""
 
@@ -340,7 +393,13 @@ class OpenAICompatClient:
             blocks.append(ToolUseBlock(id=acc["canonical_id"], name=acc["name"], input=tool_input))
 
         finish = final_state.get("finish_reason")
-        stop_reason: str | None = _FINISH_TO_STOP.get(finish, finish) if finish else None
+        stop_reason = _FINISH_TO_STOP.get(finish) if finish else None
+        if stop_reason is None:
+            # Some servers (notably llama.cpp) omit finish_reason or emit
+            # non-standard values — never forward vocabulary the agent loop
+            # would reject as an unexpected stop_reason.
+            logger.warning("openai_compat.abnormal_finish_reason %r; normalizing", finish)
+            stop_reason = "end_turn"
         # Some servers (notably llama.cpp) report "stop" even when the turn
         # produced tool calls — normalize so the loop sees "tool_use".
         if tool_acc and stop_reason == "end_turn":
@@ -401,6 +460,7 @@ class OpenAICompatClient:
         extra.setdefault("component", component)
 
         id_mapper = IdMapper()
+        messages = repair_orphaned_tool_uses_canonical(messages)
         chat_messages = canonical_to_chat_messages(messages, system=system, id_mapper=id_mapper)
 
         kwargs: dict[str, Any] = {
