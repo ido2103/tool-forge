@@ -72,8 +72,10 @@ Streams via the official `anthropic` SDK. Configured by
 ## OpenAICompatClient (`openai_compat.py`) — forge worker
 
 Chat Completions against any OpenAI-compatible server (vLLM, llama.cpp,
-LM Studio, Ollama) at `http://{host}:{port}/v1`, configured by
-`toolforge.config.WorkerSettings`. The caller still passes canonical messages
+LM Studio, Ollama) at `http://{host}:{port}/v1`, configured by any
+`toolforge.config.LocalEndpointSettings` subclass (endpoint fields
+`host`/`port`/`api_key` under the role's env prefix, e.g. `WorkerSettings`).
+The caller still passes canonical messages
 and Anthropic-shape tools; the adapter translates both ways and mints stable
 `toolu_...` ids for OpenAI `call_...` ids (`IdMapper`).
 
@@ -85,10 +87,18 @@ and Anthropic-shape tools; the adapter translates both ways and mints stable
 | `tool_calls`, `function_call` | `tool_use` |
 | `length` | `max_tokens` |
 | `content_filter` | `refusal` |
-| anything else | passed through unchanged |
+| absent or anything else | `end_turn` (logged) — the agent loop rejects vocabulary outside the Anthropic stop_reason set, and llama.cpp can omit finish_reason or emit oddities |
+
+Outbound histories are repaired by `repair_orphaned_tool_uses_canonical` (the
+canonical-level twin of `_anthropic_sanitize.fix_orphaned_tool_uses`): an
+interrupted turn's `tool_use` with no matching `tool_result` gets a synthetic
+error result, so strict Chat Completions servers don't reject the history.
 
 `delta.reasoning_content` (the vLLM/llama.cpp reasoning-parser extension for
 Qwen-style models) maps to `ThinkingDelta` / an unsigned `ThinkingBlock`.
+Known gaps: thinking blocks are *dropped outbound* (no reasoning continuity
+across turns on this path), and a llama.cpp server started without a
+reasoning-parser flag leaves `<think>` text inline in `content`.
 Malformed streamed tool arguments fall back to `{}` input rather than crashing.
 Same retry ladder as the Anthropic client (local servers drop connections
 during warm-up), with the same rule: no retry once any event was delivered —
@@ -129,8 +139,13 @@ propagated).
 
 `src/toolforge/config.py` — pydantic-settings, `.env` + environment only (no
 YAML). Every variable is documented in [`.env.example`](../.env.example).
-Fail-fast validation: `api_key` mode requires a key; `oauth` mode requires the
-creds file to exist.
+Credential validation is lazy: `AnthropicSettings` constructs without
+credentials (`has_credentials` reports availability), and
+`AnthropicClient.__init__` calls `require_credentials()` — `api_key` mode
+requires a key, `oauth` mode requires the creds file to exist. The failure is
+still at boot (client construction in `build_host`), but only when a role
+actually uses the Anthropic client, so a fully-local boot needs no Anthropic
+account.
 
 ## Testing
 

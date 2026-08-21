@@ -34,6 +34,7 @@ from toolforge.providers.openai_compat import (
     IdMapper,
     anthropic_tools_to_openai,
     canonical_to_chat_messages,
+    repair_orphaned_tool_uses_canonical,
 )
 
 _CHAT_URL = "http://127.0.0.1:9999/v1/chat/completions"
@@ -208,9 +209,81 @@ async def test_stream_text_happy_path(
     assert body["messages"][0] == {"role": "system", "content": "sys"}
 
 
+# ── repair_orphaned_tool_uses_canonical ──────────────────────────────────────
+
+
+def _assistant_with_tool_use(tool_id: str = "toolu_x") -> Message:
+    return Message(
+        role="assistant",
+        content=[ToolUseBlock(id=tool_id, name="get_weather", input={"city": "Paris"})],
+        ts=_TS,
+    )
+
+
+def test_repair_orphan_before_next_user_message() -> None:
+    messages = [
+        _assistant_with_tool_use(),
+        Message(role="user", content=[TextBlock(text="never mind")], ts=_TS),
+    ]
+    out = repair_orphaned_tool_uses_canonical(messages)
+    first = out[1].content[0]
+    assert isinstance(first, ToolResultBlock)
+    assert first.tool_use_id == "toolu_x"
+    assert first.is_error is True
+    assert isinstance(out[1].content[1], TextBlock)
+
+
+def test_repair_orphan_at_history_end_inserts_user_message() -> None:
+    messages = [_assistant_with_tool_use()]
+    out = repair_orphaned_tool_uses_canonical(messages)
+    assert len(out) == 2
+    assert out[1].role == "user"
+    (block,) = out[1].content
+    assert isinstance(block, ToolResultBlock)
+    assert block.tool_use_id == "toolu_x"
+
+
+def test_repair_leaves_fulfilled_pair_untouched() -> None:
+    messages = [
+        _assistant_with_tool_use(),
+        Message(
+            role="user", content=[ToolResultBlock(tool_use_id="toolu_x", content="ok")], ts=_TS
+        ),
+    ]
+    out = repair_orphaned_tool_uses_canonical(messages)
+    assert out == messages
+
+
+def test_repair_does_not_mutate_input() -> None:
+    user = Message(role="user", content=[TextBlock(text="hi")], ts=_TS)
+    messages = [_assistant_with_tool_use(), user]
+    repair_orphaned_tool_uses_canonical(messages)
+    assert len(messages) == 2
+    assert messages[1].content == [TextBlock(text="hi")]
+
+
+async def test_stream_repairs_orphaned_tool_use_outbound(
+    respx_mock: respx.MockRouter,
+    worker_client: OpenAICompatClient,
+    chat_sse: Callable[[Chunks], bytes],
+) -> None:
+    # An interrupted turn's orphaned tool_use must reach the server with a
+    # synthetic tool message, or strict Chat Completions servers reject it.
+    respx_mock.post(_CHAT_URL).mock(return_value=_sse_response(chat_sse(_text_chunks())))
+    await worker_client.send(
+        messages=[_assistant_with_tool_use()], system="sys", model="test-model", max_tokens=128
+    )
+    body = json.loads(respx_mock.calls[0].request.content)
+    tool_msgs = [m for m in body["messages"] if m["role"] == "tool"]
+    assert len(tool_msgs) == 1
+    assert "interrupted" in tool_msgs[0]["content"]
+
+
 @pytest.mark.parametrize(
     ("finish", "expected"),
-    [("length", "max_tokens"), ("content_filter", "refusal"), ("weird_reason", "weird_reason")],
+    # Unknown values normalize to end_turn — the loop rejects vocabulary
+    # outside the Anthropic stop_reason set, and llama.cpp can emit oddities.
+    [("length", "max_tokens"), ("content_filter", "refusal"), ("weird_reason", "end_turn")],
 )
 async def test_finish_reason_mapping(
     respx_mock: respx.MockRouter,
@@ -227,6 +300,54 @@ async def test_finish_reason_mapping(
         messages=[user_msg("hi")], system="sys", model="test-model", max_tokens=128
     )
     assert msg.stop_reason == expected
+
+
+async def test_absent_finish_reason_normalizes_to_end_turn(
+    respx_mock: respx.MockRouter,
+    worker_client: OpenAICompatClient,
+    user_msg: Callable[[str], Message],
+    chat_sse: Callable[[Chunks], bytes],
+) -> None:
+    # llama.cpp can end a stream without ever sending finish_reason; the loop
+    # would raise on stop_reason=None, so the adapter substitutes end_turn.
+    chunks = [
+        _chunk(delta={"role": "assistant", "content": "Hello"}),
+        _chunk(usage={"prompt_tokens": 5, "completion_tokens": 7, "total_tokens": 12}),
+    ]
+    respx_mock.post(_CHAT_URL).mock(return_value=_sse_response(chat_sse(chunks)))
+    msg = await worker_client.send(
+        messages=[user_msg("hi")], system="sys", model="test-model", max_tokens=128
+    )
+    assert msg.stop_reason == "end_turn"
+
+
+async def test_absent_finish_reason_with_tool_calls_maps_to_tool_use(
+    respx_mock: respx.MockRouter,
+    worker_client: OpenAICompatClient,
+    user_msg: Callable[[str], Message],
+    chat_sse: Callable[[Chunks], bytes],
+) -> None:
+    chunks = [
+        _chunk(
+            delta={
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "index": 0,
+                        "id": "call_abc",
+                        "type": "function",
+                        "function": {"name": "get_weather", "arguments": "{}"},
+                    }
+                ],
+            }
+        ),
+        _chunk(usage={"prompt_tokens": 5, "completion_tokens": 9, "total_tokens": 14}),
+    ]
+    respx_mock.post(_CHAT_URL).mock(return_value=_sse_response(chat_sse(chunks)))
+    msg = await worker_client.send(
+        messages=[user_msg("weather?")], system="sys", model="test-model", max_tokens=128
+    )
+    assert msg.stop_reason == "tool_use"
 
 
 async def test_stream_tool_calls(

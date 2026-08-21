@@ -128,10 +128,13 @@ implemented): `TestAuthor.author_tests(spec)` turns a `ToolSpec` (the validated
 `/workspace/build/<name>/test_tool.py` and a red-suite report — the contract the
 worker slice will implement against.
 
-- **Model**: frontier-tier by design; defaults to the orchestrator's model and
-  client instance (`TOOLFORGE_TEST_AUTHOR_MODEL` overrides). The cross-model
-  invariant is author-vs-worker, so sharing the orchestrator's model is fine.
-  Calls are attributed to the usage hook as `component="test_author"`.
+- **Model**: frontier-tier by design; the default `api` backend shares the
+  Anthropic client and defaults to the orchestrator's api model
+  (`TOOLFORGE_TEST_AUTHOR_MODEL` overrides). `TOOLFORGE_TEST_AUTHOR_BACKEND=local`
+  switches to an OpenAI-compatible endpoint (own `HOST`/`PORT`/`API_KEY` fields;
+  model id in `TOOLFORGE_TEST_AUTHOR_LOCAL_MODEL`) for fully-local setups. The
+  cross-model invariant is author-vs-worker, so sharing the orchestrator's model
+  is fine. Calls are attributed to the usage hook as `component="test_author"`.
 - **Prompt protocol**: the model must emit a numbered edge-case analysis
   *before* the code (reasoning precedes what it justifies), then exactly one
   fenced ```python block (plain source, never JSON-escaped code).
@@ -238,15 +241,18 @@ last failure log for orchestrator escalation.
 The worker is selected by configuration, not hardcoded. Both modes are first-class:
 
 - **api** (default): a cheaper Anthropic model (`TOOLFORGE_WORKER_API_MODEL`,
-  default `claude-haiku-4-5`) reusing the orchestrator's credentials — the
-  model is a per-send argument on the client, so no second auth path.
+  default `claude-haiku-4-5`) reusing the shared Anthropic client and
+  credentials — the model is a per-send argument on the client, so no second
+  auth path.
 - **local**: Qwen3.6-35B-A3B or Qwen3.6-27B (or anything else) served through
   any OpenAI-compatible endpoint (LM Studio, Ollama, vLLM). Cuts token cost on
   the high-volume implementation loop.
 
 Invariant in both modes: the worker is a **different model** from the
 orchestrator / test author — enforced loudly at boot by
-`validate_worker_separation` (`src/toolforge/config.py`).
+`validate_worker_separation` (`src/toolforge/config.py`). One relaxation: when
+both colliding roles run *local* backends the collision downgrades to a boot
+warning (single-GPU setups may serve one model for everything).
 
 ## Loop (from [spec](spec.md))
 

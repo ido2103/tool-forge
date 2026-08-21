@@ -67,7 +67,8 @@ Full design: [docs/spec.md](docs/spec.md) (verbatim handoff, source of truth) an
 ## Architecture
 
 **Model split** — frontier tokens for decisions, cheap tokens for sweat:
-- *Orchestrator* (frontier API model, Claude Sonnet/Opus): task execution, wall
+- *Orchestrator* (frontier API model, Claude Sonnet/Opus, by default; or a local
+  OpenAI-compatible model via `TOOLFORGE_ORCHESTRATOR_BACKEND=local`): task execution, wall
   detection, tool-spec and adversarial-test authoring, skill authoring, satisfaction
   review. All judgment lives here.
 - *Forge worker* (configurable backend): implements tools against failing tests until
@@ -75,7 +76,8 @@ Full design: [docs/spec.md](docs/spec.md) (verbatim handoff, source of truth) an
   Haiku; no local hardware required) and **local** (Qwen3.6-35B-A3B or Qwen3.6-27B via
   any OpenAI-compatible endpoint). Invariant in both: the worker is never the same
   model as the orchestrator — cross-model separation mitigates the self-verification
-  trap.
+  trap (sole relaxation: when both colliding roles run local backends, the boot
+  check downgrades the collision to a warning).
 
 **Core loop**: orchestrator works a task with registered tools → on failure the wall
 detector classifies (missing tool / misuse / impossible) → missing tool: check registry

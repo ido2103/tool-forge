@@ -79,4 +79,5 @@ def make_stub_host(
         model="fake-model",
         loaded_tools=loaded_tools or [],
         tool_store_warnings=tool_store_warnings or [],
+        config_warnings=[],
     )

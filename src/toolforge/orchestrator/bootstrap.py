@@ -20,6 +20,7 @@ from dataclasses import dataclass
 
 from toolforge.config import (
     AnthropicSettings,
+    LocalEndpointSettings,
     OrchestratorSettings,
     SandboxSettings,
     TestAuthorSettings,
@@ -55,9 +56,10 @@ class Host:
     registry: ToolRegistry
     hooks: HookManager
     system_prompt: str
-    model: str  # the orchestrator's model id, for status displays
+    model: str  # the orchestrator's effective model id, for status displays
     loaded_tools: list[str]
     tool_store_warnings: list[str]
+    config_warnings: list[str]  # boot-time config findings (e.g. relaxed invariant)
 
 
 def build_host(
@@ -77,27 +79,41 @@ def build_host(
     ``ask_user``: the host's answer channel; ``None`` is the headless contract —
     the tool is not registered, so its schema never reaches the model.
     """
-    # Fail loudly at boot on a cross-model violation, before any task runs.
-    validate_worker_separation(worker_settings, anthropic, test_author_settings)
+    # Fail loudly at boot on a cross-model violation, before any task runs
+    # (local-vs-local collisions come back as warnings for the host to render).
+    config_warnings = validate_worker_separation(
+        worker_settings, anthropic, test_author_settings, orch_settings
+    )
 
-    client = AnthropicClient(anthropic)
+    # Build the shared Anthropic client iff any role runs the api backend — the
+    # model is a per-send argument, so all api roles reuse one client and one
+    # credentials path. Fully-local boots never touch Anthropic credentials
+    # (AnthropicClient.__init__ enforces them).
+    backends = (orch_settings.backend, worker_settings.backend, test_author_settings.backend)
+    anthropic_client = AnthropicClient(anthropic) if "api" in backends else None
+
+    def _client_for(backend: str, local: LocalEndpointSettings) -> ProviderClient:
+        if backend == "api":
+            assert anthropic_client is not None  # guaranteed by the guard above
+            return anthropic_client
+        return OpenAICompatClient(local)
+
+    orch_client = _client_for(orch_settings.backend, orch_settings)
+    orch_model = orch_settings.effective_model(anthropic.model)
+
     sandbox = BashSandbox(sandbox_settings)
     atexit.register(sandbox.teardown)
 
     if hooks is None:
         hooks = HookManager()
 
-    # api mode reuses the orchestrator's client — the model is a per-send
-    # argument, so no second credentials path; local mode gets its own client.
-    worker_client: ProviderClient = (
-        client if worker_settings.backend == "api" else OpenAICompatClient(worker_settings)
-    )
+    worker_client = _client_for(worker_settings.backend, worker_settings)
     test_author = TestAuthor(
-        client,
+        _client_for(test_author_settings.backend, test_author_settings),
         sandbox,
         sandbox_settings,
         test_author_settings,
-        model=test_author_settings.model or anthropic.model,
+        model=test_author_settings.effective_model(anthropic.model),
     )
     # Sharing the host HookManager narrates the build live through the same
     # pre/post tool events the orchestrator's own calls fire.
@@ -130,10 +146,10 @@ def build_host(
     system_prompt = load_system_prompt(orch_settings.system_prompt_path)
 
     orchestrator = Orchestrator(
-        client=client,
+        client=orch_client,
         registry=registry,
         hooks=hooks,
-        model=anthropic.model,
+        model=orch_model,
         max_tokens=orch_settings.max_tokens_per_turn,
         max_iterations=orch_settings.max_iterations,
         transcript=transcript,
@@ -145,7 +161,8 @@ def build_host(
         registry=registry,
         hooks=hooks,
         system_prompt=system_prompt,
-        model=anthropic.model,
+        model=orch_model,
         loaded_tools=loaded,
         tool_store_warnings=warnings,
+        config_warnings=config_warnings,
     )

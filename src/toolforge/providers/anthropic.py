@@ -227,6 +227,9 @@ class AnthropicClient:
     name: str = "anthropic"
 
     def __init__(self, settings: AnthropicSettings, usage_hook: UsageHook | None = None) -> None:
+        # Credentials are enforced here, not in AnthropicSettings — a fully-local
+        # boot constructs the settings but never this client.
+        settings.require_credentials()
         self.settings = settings
         self.auth_mode = AuthMode(settings.auth_mode)
         self._usage_hook: UsageHook = usage_hook or log_usage

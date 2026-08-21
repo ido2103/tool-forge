@@ -20,6 +20,7 @@ from toolforge.config import (
 from toolforge.orchestrator.ask_user import AskUserRequest
 from toolforge.orchestrator.bootstrap import build_host
 from toolforge.orchestrator.hooks import HookEvent, HookManager
+from toolforge.providers import OpenAICompatClient
 
 
 def _settings(
@@ -80,3 +81,47 @@ def test_cross_model_violation_fails_at_boot(tmp_path: Path) -> None:
     settings[3] = WorkerSettings(backend="api", api_model="claude-opus-4-8")
     with pytest.raises(ValueError, match="orchestrator model"):
         build_host(*settings)  # type: ignore[arg-type]
+
+
+def _local_settings(
+    tmp_path: Path,
+) -> tuple[
+    AnthropicSettings, OrchestratorSettings, SandboxSettings, WorkerSettings, TestAuthorSettings
+]:
+    """All three roles on local backends; Anthropic settings without credentials."""
+    return (
+        AnthropicSettings(_env_file=None),
+        OrchestratorSettings(
+            _env_file=None, backend="local", model="local-a", runs_dir=tmp_path / "runs"
+        ),
+        SandboxSettings(workspace_path=tmp_path / "workspace", tools_path=tmp_path / "tools"),
+        WorkerSettings(_env_file=None, backend="local", model="local-b"),
+        TestAuthorSettings(_env_file=None, backend="local", local_model="local-c"),
+    )
+
+
+def test_fully_local_boot_without_anthropic_credentials(
+    clean_provider_env: None, tmp_path: Path
+) -> None:
+    host = build_host(*_local_settings(tmp_path))
+    assert host.model == "local-a"
+    assert isinstance(host.orchestrator._client, OpenAICompatClient)
+    assert host.config_warnings == []
+
+
+def test_api_role_without_credentials_fails_at_boot(
+    clean_provider_env: None, tmp_path: Path
+) -> None:
+    settings = list(_local_settings(tmp_path))
+    # One api role is enough to require the shared Anthropic client.
+    settings[3] = WorkerSettings(_env_file=None, backend="api", api_model="claude-haiku-4-5")
+    with pytest.raises(ValueError, match="ANTHROPIC_API_KEY"):
+        build_host(*settings)  # type: ignore[arg-type]
+
+
+def test_local_local_collision_boots_with_warning(clean_provider_env: None, tmp_path: Path) -> None:
+    settings = list(_local_settings(tmp_path))
+    settings[3] = WorkerSettings(_env_file=None, backend="local", model="local-a")
+    host = build_host(*settings)  # type: ignore[arg-type]
+    assert len(host.config_warnings) == 1
+    assert "worker and orchestrator" in host.config_warnings[0]

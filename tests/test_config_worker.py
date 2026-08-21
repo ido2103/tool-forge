@@ -9,6 +9,7 @@ from pydantic import SecretStr, ValidationError
 
 from toolforge.config import (
     AnthropicSettings,
+    OrchestratorSettings,
     TestAuthorSettings,
     WorkerSettings,
     validate_worker_separation,
@@ -63,6 +64,19 @@ def test_effective_model_by_backend(clean_provider_env: None) -> None:
     assert local.effective_model == "m-local"
 
 
+def test_worker_inherited_endpoint_env_vars(
+    clean_provider_env: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The endpoint fields inherited from LocalEndpointSettings read the worker prefix."""
+    monkeypatch.setenv("TOOLFORGE_WORKER_HOST", "192.168.1.250")
+    monkeypatch.setenv("TOOLFORGE_WORKER_PORT", "8090")
+    monkeypatch.setenv("TOOLFORGE_WORKER_API_KEY", "sekrit")
+
+    s = WorkerSettings()
+    assert s.base_url == "http://192.168.1.250:8090/v1"
+    assert s.api_key.get_secret_value() == "sekrit"
+
+
 # ── validate_worker_separation ───────────────────────────────────────────────
 
 
@@ -77,11 +91,13 @@ def _anthropic(model: str, tmp_path: Path) -> AnthropicSettings:
 
 
 def test_separation_passes_when_distinct(clean_provider_env: None, tmp_path: Path) -> None:
-    validate_worker_separation(
+    warnings = validate_worker_separation(
         WorkerSettings(_env_file=None, backend="api", api_model="claude-haiku-4-5"),
         _anthropic("claude-opus-4-8", tmp_path),
         TestAuthorSettings(_env_file=None, model=None),
+        OrchestratorSettings(_env_file=None),
     )
+    assert warnings == []
 
 
 def test_separation_rejects_orchestrator_collision(
@@ -92,6 +108,7 @@ def test_separation_rejects_orchestrator_collision(
             WorkerSettings(_env_file=None, backend="api", api_model="claude-opus-4-8"),
             _anthropic("claude-opus-4-8", tmp_path),
             TestAuthorSettings(_env_file=None, model=None),
+            OrchestratorSettings(_env_file=None),
         )
 
 
@@ -103,4 +120,47 @@ def test_separation_rejects_test_author_collision(clean_provider_env: None, tmp_
             WorkerSettings(_env_file=None, backend="local", model="some-model"),
             _anthropic("claude-opus-4-8", tmp_path),
             TestAuthorSettings(_env_file=None, model="some-model"),
+            OrchestratorSettings(_env_file=None),
+        )
+
+
+def test_separation_local_local_orchestrator_collision_warns(
+    clean_provider_env: None, tmp_path: Path
+) -> None:
+    # Both roles on local backends: same model degrades to a warning
+    # (single-GPU convenience), never a hard failure.
+    warnings = validate_worker_separation(
+        WorkerSettings(_env_file=None, backend="local", model="qwen-27b"),
+        _anthropic("claude-opus-4-8", tmp_path),
+        TestAuthorSettings(_env_file=None, model=None),
+        OrchestratorSettings(_env_file=None, backend="local", model="qwen-27b"),
+    )
+    assert len(warnings) == 1
+    assert "worker and orchestrator" in warnings[0]
+
+
+def test_separation_local_local_author_collision_warns(
+    clean_provider_env: None, tmp_path: Path
+) -> None:
+    warnings = validate_worker_separation(
+        WorkerSettings(_env_file=None, backend="local", model="qwen-27b"),
+        _anthropic("claude-opus-4-8", tmp_path),
+        TestAuthorSettings(_env_file=None, backend="local", local_model="qwen-27b"),
+        OrchestratorSettings(_env_file=None),
+    )
+    assert len(warnings) == 1
+    assert "worker and test author" in warnings[0]
+
+
+def test_separation_api_worker_local_orchestrator_collision_raises(
+    clean_provider_env: None, tmp_path: Path
+) -> None:
+    # The relaxation needs BOTH roles local — an api worker colliding with a
+    # local orchestrator's model id still fails loudly.
+    with pytest.raises(ValueError, match="orchestrator model"):
+        validate_worker_separation(
+            WorkerSettings(_env_file=None, backend="api", api_model="qwen-27b"),
+            _anthropic("claude-opus-4-8", tmp_path),
+            TestAuthorSettings(_env_file=None, model=None),
+            OrchestratorSettings(_env_file=None, backend="local", model="qwen-27b"),
         )

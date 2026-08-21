@@ -1,8 +1,9 @@
 # TUI
 
 **Status: implemented — chat pane with streamed thinking/answer, slash
-commands, boot/reset flows, tool-activity sidebar, live forge panel, and the
-`ask_user` modal, all over `bootstrap.build_host`.**
+commands, boot/reset flows, tool-activity sidebar, live forge panel, the
+`ask_user` modal, and a double-Esc quit chord, all over
+`bootstrap.build_host`.**
 
 The main interactive surface (`src/toolforge/tui/`, the `toolforge` console
 script). The stdlib REPL (`toolforge-repl`) remains the dependency-free fallback;
@@ -23,7 +24,7 @@ both are thin *hosts* over the same assembly point
 │                                   │   forge[x]: attempt 2/4·1:23│
 │                                   │   → write_tool_code …       │
 ├ Input (#prompt) ────────────────────────────────────────────────┤
-└ Footer (Esc stop · ^N new session) ─────────────────────────────┘
+└ Footer (Esc stop (×2 quit) · ^N new session) ───────────────────┘
 ```
 
 ## Module map
@@ -96,8 +97,12 @@ Textual owns the asyncio loop; nothing runs on threads.
 
 `/new` (clear history) · `/reset` (also drop candidates + recycle the
 container) · `/quit` `/exit` · unknown `/x` gets a hint. `Esc` stops the
-running turn; `^N` = `/new`; `^Q` quits. Commands other than quit are rejected
-while a turn runs. **Quit during a turn** is graceful: `request_stop`, then a
+running turn; two `Esc` within ~1 s quit (`^Q` also quits, but terminals like
+VSCode's swallow it before it reaches the app — Esc-Esc is the portable
+chord; a lone idle Esc shows a "press esc again to quit" toast, and `^C` —
+copy while the prompt is focused — toasts the Esc-Esc chord instead of
+Textual's stock ^Q-only hint); `^N` = `/new`. Commands other than quit are
+rejected while a turn runs. **Quit during a turn** is graceful: `request_stop`, then a
 bounded (~3 s) wait in a worker for the loop's "Stopping." finish before
 `exit()` — a wedged turn never traps the user. Sandbox teardown stays on the
 `atexit` hook registered by `build_host`.
